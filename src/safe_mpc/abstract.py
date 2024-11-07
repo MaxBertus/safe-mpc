@@ -4,8 +4,8 @@ from copy import deepcopy
 from urdf_parser_py.urdf import URDF
 import adam
 from adam.casadi import KinDynComputations
-from casadi import MX, vertcat, norm_2, Function, cos, sin
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from casadi import MX, vertcat, norm_2, Function, cos, sin, inv
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 import torch
 import scipy.linalg as lin
 import torch.nn as nn
@@ -77,16 +77,19 @@ class AdamModel:
         self.x_dot = MX.sym("x_dot", nq * 2)
         self.u = MX.sym("u", nq)
         self.p = MX.sym("p", 1)     # Safety margin for the NN model
-        # Double integrator
-        self.f_disc = vertcat(
-            self.x[:nq] + params.dt * self.x[nq:] + 0.5 * params.dt**2 * self.u,
-            self.x[nq:] + params.dt * self.u
-        ) 
-        self.f_fun = Function('f', [self.x, self.u], [self.f_disc])
+        # Forward dynamics
+        H_b = np.eye(4)
+        self.f_forward = vertcat(
+            self.x[nq:],
+            inv(self.mass(H_b, self.x[:nq])[6:, 6:]) 
+            @ (self.u - self.bias(H_b, self.x[:nq], np.zeros(6), self.x[nq:])[6:])
+        )
+        self.f_fun = Function('f', [self.x, self.u], [self.f_forward])
             
         self.amodel.x = self.x
         self.amodel.u = self.u
-        self.amodel.disc_dyn_expr = self.f_disc
+        self.amodel.xdot = self.x_dot
+        self.amodel.f_expl_expr = self.f_forward
         self.amodel.p = self.p
 
         self.nx = self.amodel.x.size()[0]
@@ -95,12 +98,6 @@ class AdamModel:
         self.nq = nq
         self.nv = nq
         self.np = self.amodel.p.size()[0]
-
-        # Real dynamics
-        H_b = np.eye(4)
-        self.tau = self.mass(H_b, self.x[:nq])[6:, 6:] @ self.u + \
-                   self.bias(H_b, self.x[:nq], np.zeros(6), self.x[nq:])[6:]
-        self.tau_fun = Function('tau', [self.x, self.u], [self.tau])
 
         # EE position (global frame)
         T_ee = self.fk(np.eye(4), self.x[:nq])
@@ -115,8 +112,8 @@ class AdamModel:
         # joint_effort = np.array([joint.limit.effort for joint in robot_joints]) 
         joint_effort = np.array([2., 23., 10., 4.])
 
-        self.tau_min = - joint_effort
-        self.tau_max = joint_effort
+        self.u_min = - joint_effort
+        self.u_max = joint_effort
         self.x_min = np.hstack([joint_lower, - joint_velocity])
         self.x_max = np.hstack([joint_upper, joint_velocity])
 
@@ -138,42 +135,15 @@ class AdamModel:
         return np.all(np.logical_and(x >= self.x_min - self.params.tol_x, 
                                      x <= self.x_max + self.params.tol_x))
 
-    def checkTorqueConstraints(self, tau):
-        # for i in range(len(tau)):
-        #     print(f' Iter {i} : {self.tau_max - np.abs(tau[i].flatten())}')
-        return np.all(np.logical_and(tau >= self.tau_min - self.params.tol_tau, 
-                                     tau <= self.tau_max + self.params.tol_tau))
+    def checkControlConstraints(self, u):
+        return np.all(np.logical_and(u >= self.u_min - self.params.tol_tau, 
+                                     u <= self.u_max + self.params.tol_tau))
 
     def checkRunningConstraints(self, x, u):
-        tau = np.array([self.tau_fun(x[i], u[i]).T for i in range(len(u))])
-        return self.checkStateConstraints(x) and self.checkTorqueConstraints(tau)
+        return self.checkStateConstraints(x) and self.checkControlConstraints(u)
 
     def checkSafeConstraints(self, x):
         return self.nn_func(x, self.params.alpha) >= - self.params.tol_nn 
-    
-    def integrate(self, x, u):
-        x_next = np.zeros(self.nx)
-        tau = np.array(self.tau_fun(x, u).T)
-        if not self.checkTorqueConstraints(tau):
-            # Cannot exceed the torque limits --> sat and compute forward dynamics on real system 
-            H_b = np.eye(4)
-            tau_sat = np.clip(tau, self.tau_min, self.tau_max)
-            M = np.array(self.mass(H_b, x[:self.nq])[6:, 6:])
-            h = np.array(self.bias(H_b, x[:self.nq], np.zeros(6), x[self.nq:])[6:])
-            u = np.linalg.solve(M, (tau_sat.T - h)).T
-        x_next[:self.nq] = x[:self.nq] + self.params.dt * x[self.nq:] + 0.5 * self.params.dt**2 * u
-        x_next[self.nq:] = x[self.nq:] + self.params.dt * u
-        return x_next, u
-
-    def checkDynamicsConstraints(self, x, u):
-        # Rollout the control sequence
-        n = np.shape(u)[0]
-        x_sim = np.zeros((n + 1, self.nx))
-        x_sim[0] = np.copy(x[0])
-        for i in range(n):
-            x_sim[i + 1], _ = self.integrate(x_sim[i], u[i])
-        # Check if the rollout state trajectory is almost equal to the optimal one
-        return np.linalg.norm(x - x_sim) < self.params.tol_dyn * np.sqrt(n+1) 
     
     def setNNmodel(self):
         nls = {
@@ -211,6 +181,38 @@ class AdamModel:
                                       build_dir=f'{self.params.GEN_DIR}nn_{self.amodel.name}')
         self.nn_model = self.l4c_model(state) * (100 - self.p) / 100 - vel_norm
         self.nn_func = Function('nn_func', [self.x, self.p], [self.nn_model])
+
+
+class SimDynamics:
+    def __init__(self, model):
+        self.model = model
+        self.params = model.params
+        sim = AcadosSim()
+        sim.model = model.amodel
+        sim.solver_options.T = self.params.dt
+        sim.solver_options.integrator_type = 'ERK'
+        sim.solver_options.num_stages = 4
+        sim.parameter_values = np.array([self.params.alpha])
+        gen_name = self.params.GEN_DIR + 'sim_' + sim.model.name
+        sim.code_export_directory = gen_name
+        self.integrator = AcadosSimSolver(sim, build=self.params.build, json_file=gen_name + '.json')
+
+    def simulate(self, x, u):
+        self.integrator.set("x", x)
+        self.integrator.set("u", u)
+        self.integrator.solve()
+        x_next = self.integrator.get("x")
+        return x_next
+    
+    def checkDynamicsConstraints(self, x, u):
+        # Rollout the control sequence
+        n = np.shape(u)[0]
+        x_sim = np.zeros((n + 1, self.model.nx))
+        x_sim[0] = np.copy(x[0])
+        for i in range(n):
+            x_sim[i + 1] = self.simulate(x_sim[i], u[i])
+        # Check if the rollout state trajectory is almost equal to the optimal one
+        return np.linalg.norm(x - x_sim) < self.params.tol_dyn * np.sqrt(n+1) 
 
 class TriplePendulumModel(AdamModel):
     ''' Triple pendulum model from the Lagrangian formulation '''
@@ -685,10 +687,11 @@ class TriplePendulumModel(AdamModel):
 
 
 class AbstractController:
-    def __init__(self, model, obstacles=None):
+    def __init__(self, simulator, obstacles=None):
         self.ocp_name = "".join(re.findall('[A-Z][^A-Z]*', self.__class__.__name__)[:-1]).lower()
-        self.params = model.params
-        self.model = model
+        self.simulator = simulator
+        self.params = simulator.params
+        self.model = simulator.model
         self.obstacles = obstacles
 
         self.N = self.params.N
@@ -746,6 +749,9 @@ class AbstractController:
         self.ocp.constraints.ubx_0 = self.model.x_max
         self.ocp.constraints.idxbx_0 = np.arange(self.model.nx)
 
+        self.ocp.constraints.lbu = self.model.u_min
+        self.ocp.constraints.ubu = self.model.u_max
+        self.ocp.constraints.idxbu = np.arange(self.model.nu)
         self.ocp.constraints.lbx = self.model.x_min
         self.ocp.constraints.ubx = self.model.x_max
         self.ocp.constraints.idxbx = np.arange(self.model.nx)
@@ -758,15 +764,6 @@ class AbstractController:
         self.nl_con_0, self.nl_lb_0, self.nl_ub_0 = [], [], []
         self.nl_con, self.nl_lb, self.nl_ub = [], [], []
         self.nl_con_e, self.nl_lb_e, self.nl_ub_e = [], [], []
-        
-        # --> dynamics (only on running nodes)
-        self.nl_con_0.append(self.model.tau)
-        self.nl_lb_0.append(self.model.tau_min)
-        self.nl_ub_0.append(self.model.tau_max)
-        
-        self.nl_con.append(self.model.tau)
-        self.nl_lb.append(self.model.tau_min)
-        self.nl_ub.append(self.model.tau_max)
         
         # --> collision (both on running and terminal nodes)
         if obstacles is not None and self.params.obs_flag:
@@ -799,35 +796,32 @@ class AbstractController:
         # Additional settings, in general is an empty method
         self.additionalSetting()
 
-        self.model.amodel.con_h_expr_0 = vertcat(*self.nl_con_0)   
-        self.model.amodel.con_h_expr = vertcat(*self.nl_con)
+        if len(self.nl_con_0) > 0:
+            self.model.amodel.con_h_expr_0 = vertcat(*self.nl_con_0)   
+            self.ocp.constraints.lh_0 = np.hstack(self.nl_lb_0)
+            self.ocp.constraints.uh_0 = np.hstack(self.nl_ub_0)
         
-        self.ocp.constraints.lh_0 = np.hstack(self.nl_lb_0)
-        self.ocp.constraints.uh_0 = np.hstack(self.nl_ub_0)
-        self.ocp.constraints.lh = np.hstack(self.nl_lb)
-        self.ocp.constraints.uh = np.hstack(self.nl_ub)
+        if len(self.nl_con) > 0:
+            self.model.amodel.con_h_expr = vertcat(*self.nl_con)
+            self.ocp.constraints.lh = np.hstack(self.nl_lb)
+            self.ocp.constraints.uh = np.hstack(self.nl_ub)
+
         if len(self.nl_con_e) > 0:
             self.model.amodel.con_h_expr_e = vertcat(*self.nl_con_e)
             self.ocp.constraints.lh_e = np.hstack(self.nl_lb_e)
             self.ocp.constraints.uh_e = np.hstack(self.nl_ub_e)
 
         # Solver options
-        self.ocp.solver_options.integrator_type = "DISCRETE"
+        self.ocp.solver_options.integrator_type = "ERK"
         self.ocp.solver_options.hessian_approx = "EXACT"
         self.ocp.solver_options.exact_hess_constr = 0
         self.ocp.solver_options.exact_hess_dyn = 0   
         self.ocp.solver_options.nlp_solver_type = self.params.solver_type
         self.ocp.solver_options.hpipm_mode = self.params.solver_mode
-        # self.ocp.solver_options.qp_solver = 'FULL_CONDENSING_HPIPM'
         self.ocp.solver_options.nlp_solver_max_iter = self.params.nlp_max_iter
         self.ocp.solver_options.qp_solver_iter_max = self.params.qp_max_iter
         self.ocp.solver_options.globalization = self.params.globalization
-        # self.ocp.solver_options.alpha_reduction = self.params.alpha_reduction
-        # self.ocp.solver_options.alpha_min = self.params.alpha_min
         self.ocp.solver_options.levenberg_marquardt = self.params.levenberg_marquardt
-        # self.ocp.solver_options.tol = 1e-4
-        # self.ocp.solver_options.qp_tol = 1e-4
-        # self.ocp.solver_options.regularize_method = 'PROJECT'   # Maybe is a good idea if exact hessian is not used
         # self.ocp.solver_options.ext_fun_compile_flags = '-O2'
 
         gen_name = self.params.GEN_DIR + 'ocp_' + self.ocp_name + '_' + self.model.amodel.name
@@ -924,11 +918,6 @@ class AbstractController:
 
         # Solve the OCP
         status = self.ocp_solver.solve()
-        # self.ocp_solver.store_iterate(overwrite=True)
-        # if status != 0:
-        #     self.ocp_solver.print_statistics()
-        #     self.ocp_solver.dump_last_qp_to_json("qp.json", overwrite=True)
-            # self.ocp_solver.reset()         # Reset the solver, to remove all the NaNs
 
         # Save the temporary solution, independently of the status
         for i in range(self.N):
@@ -997,21 +986,4 @@ class AbstractController:
 
         self.x_temp = np.zeros((self.N + 1, self.model.nx))
         self.u_temp = np.zeros((self.N, self.model.nu))
-
-    def safeGuess(self, x, u, n_safe):
-        for i in range(n_safe):
-            x, _ = self.model.integrate(x, u[i])
-            if not self.model.checkStateConstraints(x) or not self.checkCollision(x):
-                return False, None
-        return self.model.checkSafeConstraints(x), x
-    
-    def guessCorrection(self):
-        x_sim = np.copy(self.x_guess)
-        u_sim = np.copy(self.u_guess)
-        for i in range(self.N):
-            x_sim[i + 1], u_sim[i] = self.model.integrate(x_sim[i], self.u_guess[i])
-        if self.model.checkStateConstraints(x_sim) and np.all([self.checkCollision(x) for x in x_sim]):
-            self.x_guess = np.copy(x_sim)
-            self.u_guess = np.copy(u_sim)
-            return True
-        return False
+        

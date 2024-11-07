@@ -47,10 +47,8 @@ class NaiveOCP:
 
             if k < N:
                 cost += U[k].T @ R @ U[k]
-                # Dynamics constraint
-                opti.subject_to(X[k + 1] == model.f_fun(X[k], U[k]))
-                # Torque constraints
-                opti.subject_to(opti.bounded(model.tau_min, model.tau_fun(X[k], U[k]), model.tau_max))
+                # Dynamics constraint --> Euler integration
+                opti.subject_to(X[k + 1] == X[k] + self.params.dt * model.f_fun(X[k], U[k]))
 
             if obstacles is not None and self.params.obs_flag:
                 # Collision avoidance
@@ -100,7 +98,6 @@ class NaiveOCP:
             'ipopt.constr_viol_tol': 1e-6,
             'ipopt.compl_inf_tol': 1e-6,
             'ipopt.hessian_approximation': 'limited-memory',
-            # 'detect_simple_bounds': 'yes',
             'ipopt.max_iter': self.params.nlp_max_iter,
             'ipopt.linear_solver': 'ma57',
             'ipopt.sb': 'yes'

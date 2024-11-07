@@ -3,7 +3,7 @@ import numpy as np
 from tqdm import tqdm
 from functools import reduce
 from safe_mpc.parser import Parameters, parse_args
-from safe_mpc.abstract import AdamModel, TriplePendulumModel
+from safe_mpc.abstract import AdamModel, TriplePendulumModel, SimDynamics
 from safe_mpc.utils import obstacles, ee_ref, get_controller
 
 
@@ -22,10 +22,11 @@ if model_name == 'triple_pendulum':
     model = TriplePendulumModel(params)
 else:
     model = AdamModel(params, n_dofs=4)
+    simulator = SimDynamics(model)
     model.ee_ref = ee_ref
 
 cont_name = args['controller']
-controller = get_controller(cont_name, model, obstacles)
+controller = get_controller(cont_name, simulator, obstacles)
 
 data = pickle.load(open(f'{params.DATA_DIR}{model_name}_{cont_name}_guess.pkl', 'rb'))
 x_guess = data['xg']
@@ -63,9 +64,7 @@ for i in range(params.test_num):
     sa_flag = False
     for j in range(params.n_steps):
         u[j], sa_flag = controller.step(x_sim[j])
-        # nn_eval[j] = model.nn_func(controller.x_temp[-1])
 
-        tau = np.array([model.tau_fun(controller.x_temp[k], controller.u_temp[k]).T for k in range(len(controller.u_temp))])
         if not model.checkStateConstraints(controller.x_temp):
             counters[0] += 1
             if EVAL:
@@ -75,12 +74,12 @@ for i in range(params.test_num):
                     if np.any(viol + params.tol_x < 0):
                         print(f'\t\tState {k} out of bounds: {viol}')
 
-        if not model.checkTorqueConstraints(tau):
+        if not model.checkControlConstraints(controller.u_temp):
             counters[1] += 1
             if EVAL:
                 print(f'\ttau Bounds violated at step {j}')
-                for k in range(len(tau)):
-                    viol = model.tau_max - np.abs(tau[k])
+                for k in range(len(controller.u_temp)):
+                    viol = model.tau_max - np.abs(controller.u_temp[k])
                     if np.any(viol + params.tol_tau < 0):
                         # Collect any violation, taking the minimum (so max violation)
                         tau_viol.append(np.min(viol))
@@ -110,7 +109,7 @@ for i in range(params.test_num):
             counters[4] += 1
 
         stats.append(controller.getTime())
-        x_sim[j + 1], _ = model.integrate(x_sim[j], u[j])
+        x_sim[j + 1] = simulator.simulate(x_sim[j], u[j])
         # Check Safe Abort
         if sa_flag:
             x_viable += [controller.getLastViableState()]
@@ -159,15 +158,15 @@ times = np.array(stats)
 for field, t in zip(controller.time_fields, np.quantile(times, 0.99, axis=0)):
     print(f"{field:<20} -> {t}")
     
-# Save simulation data
-with open(f'{params.DATA_DIR}{model_name}_{cont_name}_mpc.pkl', 'wb') as f:
-    pickle.dump({'x': np.asarray(x_sim_list),
-                 'u': np.asarray(u_list),
-                 'conv_idx' : conv_idx,
-                 'collisions_idx' : collisions_idx,
-                 'unconv_idx' : unconv_idx,
-                 'viable_idx': viable_idx, 
-                 'x_viable': np.asarray(x_viable)}, f)
+# # Save simulation data
+# with open(f'{params.DATA_DIR}{model_name}_{cont_name}_mpc.pkl', 'wb') as f:
+#     pickle.dump({'x': np.asarray(x_sim_list),
+#                  'u': np.asarray(u_list),
+#                  'conv_idx' : conv_idx,
+#                  'collisions_idx' : collisions_idx,
+#                  'unconv_idx' : unconv_idx,
+#                  'viable_idx': viable_idx, 
+#                  'x_viable': np.asarray(x_viable)}, f)
 
 # print(f'Total torque violations: {len(tau_viol)}')
 # np.save(f'{params.DATA_DIR}tau_viol_wo_check.npy', np.asarray(tau_viol))

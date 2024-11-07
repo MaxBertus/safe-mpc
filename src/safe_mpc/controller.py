@@ -5,12 +5,12 @@ from casadi import Function
 
 
 class NaiveController(AbstractController):
-    def __init__(self, model, obstacles=None):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles=None):
+        super().__init__(simulator, obstacles)
 
     def checkGuess(self):
         return self.model.checkRunningConstraints(self.x_temp, self.u_temp) and \
-               self.model.checkDynamicsConstraints(self.x_temp, self.u_temp) and \
+               self.simulator.checkDynamicsConstraints(self.x_temp, self.u_temp) and \
                np.all([self.checkCollision(x) for x in self.x_temp])
 
     def initialize(self, x0, u0=None):
@@ -38,8 +38,8 @@ class NaiveController(AbstractController):
     
 class TerminalZeroVelocity(NaiveController):
     """ Naive MPC with zero terminal velocity as constraint """
-    def __init__(self, model, obstacles=None):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles=None):
+        super().__init__(simulator, obstacles)
 
     def additionalSetting(self):
         x_min_e = np.hstack((self.model.x_min[:self.model.nq], np.zeros(self.model.nv)))
@@ -52,8 +52,8 @@ class TerminalZeroVelocity(NaiveController):
 
 class RecedingAccBounds(NaiveController):
     """ MPC with acceleration bounds """
-    def __init__(self, model, obstacles=None):
-        super().__init__(model, obstacles)  
+    def __init__(self, simulator, obstacles=None):
+        super().__init__(simulator, obstacles)  
         self.abort_flag = self.params.abort_flag
 
     def additionalSetting(self):
@@ -153,21 +153,21 @@ class RecedingAccBounds(NaiveController):
     
 
 class STController(NaiveController):
-    def __init__(self, model, obstacles):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles):
+        super().__init__(simulator, obstacles)
 
     def additionalSetting(self):
         self.terminalConstraint()
 
 
 class STWAController(STController):
-    def __init__(self, model, obstacles):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles):
+        super().__init__(simulator, obstacles)
         self.x_viable = None
 
     def checkGuess(self):
         return self.model.checkRunningConstraints(self.x_temp, self.u_temp) and \
-               self.model.checkDynamicsConstraints(self.x_temp, self.u_temp) and \
+               self.simulator.checkDynamicsConstraints(self.x_temp, self.u_temp) and \
                self.model.checkSafeConstraints(self.x_temp[-1]) and \
                np.all([self.checkCollision(x) for x in self.x_temp])
 
@@ -191,16 +191,16 @@ class STWAController(STController):
 
 
 class HTWAController(STWAController):
-    def __init__(self, model, obstacles):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles):
+        super().__init__(simulator, obstacles)
 
     def additionalSetting(self):
         self.terminalConstraint(soft=False)
 
 
 class RecedingController(STWAController):
-    def __init__(self, model, obstacles):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles):
+        super().__init__(simulator, obstacles)
         self.r = self.N
         self.r_last = self.N
         self.abort_flag = self.params.abort_flag
@@ -246,8 +246,8 @@ class RecedingController(STWAController):
         return self.provideControl()
 
 class SafeBackupController(AbstractController):
-    def __init__(self, model, obstacles):
-        super().__init__(model, obstacles)
+    def __init__(self, simulator, obstacles):
+        super().__init__(simulator, obstacles)
 
     def additionalSetting(self):
         # Linear LS cost

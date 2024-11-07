@@ -49,7 +49,7 @@ def get_ocp(ocp_name, model, obstacles) -> NaiveOCP:
     else:
         raise ValueError(f'OCP {ocp_name} not available')
 
-def get_controller(cont_name, model, obstacles) -> AbstractController:
+def get_controller(cont_name, simulator, obstacles) -> AbstractController:
     controllers = { 'naive': NaiveController,
                     'zerovel': TerminalZeroVelocity,
                     'st': STController,
@@ -58,7 +58,7 @@ def get_controller(cont_name, model, obstacles) -> AbstractController:
                     'receding': RecedingController,
                     'trivial': RecedingAccBounds }
     if cont_name in controllers:
-        return controllers[cont_name](model, obstacles)
+        return controllers[cont_name](simulator, obstacles)
     else:
         raise ValueError(f'Controller {cont_name} not available')
 
