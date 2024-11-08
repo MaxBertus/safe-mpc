@@ -22,6 +22,7 @@ class NaiveOCP:
             X += [opti.variable(model.nx)]
             opti.subject_to(opti.bounded(model.x_min, X[-1], model.x_max))
             U += [opti.variable(model.nu)]
+            opti.subject_to(opti.bounded(model.u_min, U[-1], model.u_max))
 
         opti.subject_to(X[0] == x_init)
         

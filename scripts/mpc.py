@@ -158,15 +158,15 @@ times = np.array(stats)
 for field, t in zip(controller.time_fields, np.quantile(times, 0.99, axis=0)):
     print(f"{field:<20} -> {t}")
     
-# # Save simulation data
-# with open(f'{params.DATA_DIR}{model_name}_{cont_name}_mpc.pkl', 'wb') as f:
-#     pickle.dump({'x': np.asarray(x_sim_list),
-#                  'u': np.asarray(u_list),
-#                  'conv_idx' : conv_idx,
-#                  'collisions_idx' : collisions_idx,
-#                  'unconv_idx' : unconv_idx,
-#                  'viable_idx': viable_idx, 
-#                  'x_viable': np.asarray(x_viable)}, f)
+# Save simulation data
+with open(f'{params.DATA_DIR}{model_name}_{cont_name}_mpc.pkl', 'wb') as f:
+    pickle.dump({'x': np.asarray(x_sim_list),
+                 'u': np.asarray(u_list),
+                 'conv_idx' : conv_idx,
+                 'collisions_idx' : collisions_idx,
+                 'unconv_idx' : unconv_idx,
+                 'viable_idx': viable_idx, 
+                 'x_viable': np.asarray(x_viable)}, f)
 
 # print(f'Total torque violations: {len(tau_viol)}')
 # np.save(f'{params.DATA_DIR}tau_viol_wo_check.npy', np.asarray(tau_viol))
