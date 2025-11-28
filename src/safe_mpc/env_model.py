@@ -188,7 +188,6 @@ class AdamModel:
     def checkRunningConstraints(self, x, u):
         return self.checkStateConstraints(x) and self.checkTorqueConstraints(x,u)
 
-    
     def integrate(self, x, u):
         x_next = np.zeros(self.nx)
         tau = np.array(self.tau_noisy_fun(x, u).T)
@@ -242,7 +241,6 @@ class AdamModel:
                     return False
             return True
 
-    
     def generate_NLconstraints_list(self):
         """
         Generate list of nonlinear constraints with bounds, for nodes 0, 1 - N-1, and N, as well as the list of casadi function of the collision constraints

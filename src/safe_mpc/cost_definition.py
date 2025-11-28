@@ -57,7 +57,6 @@ class ZeroCost(AbstractCost):
         # controller.ocp.cost.yref = np.zeros(self.model.ny)
         # controller.ocp.cost.yref_e = np.zeros(self.model.nx)
 
-
 class ReachTargetNLS(AbstractCost):
     def __init__(self,model,Q,R):
         super().__init__(model)
