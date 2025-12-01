@@ -103,6 +103,7 @@ for i in range(0,params.test_num):#x_init.shape[0]):
     # randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=args['controller'])
     # controller.model.update_randomized_dynamics(controller_name=args['controller'])
     # safe_ocp.model.update_randomized_dynamics(controller_name=args['controller'])
+    randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=(f'noise{args["noise"]}_{i}'))
     controller.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
     safe_ocp.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
 

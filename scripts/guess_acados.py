@@ -1,4 +1,5 @@
 import time
+import os
 import pickle
 import numpy as np
 from tqdm import tqdm
@@ -225,7 +226,10 @@ else:
         else:
             print('FAILED')
 
+
 progress_bar.close()
+
+os.makedirs(params.DATA_DIR, exist_ok=True)
 
 print(f'Number of failed initializations: {fails}')
 print(f'Number of skipped initial conditions: {skip_ics}')
