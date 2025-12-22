@@ -1,11 +1,11 @@
-test_num: 100             # Number of tests with random initial joint positions and zero velocities
+test_num: 1             # Number of tests with random initial joint positions and zero velocities
 n_steps: 800              # Number of time steps in each test DOUBT: what is a time step here?
 cpu_num: 24
 
 N: 45                     # Horizon length ---> 45 for z1 
 back_hor: 45              # Horizon for the backup controller
 dt: 5e-3                  # Time step
-alpha: 10.                # Safety margin [I supposed for viability kernel] 
+alpha: 10.                # Safety margin [I suppose for viability kernel] 
 
 n_dofs: 5                 # Number of controlled joints 
 n_dof_safe_set: 5         # DOUBT: what is this?
@@ -32,11 +32,11 @@ ipopt_opts:               # IPOPT options
   'ipopt.sb': 'yes'
         
 
-Q_weight: 1e2              # State cost
-  # - [100, 0., 0.]
-  # - [0., 100, 0.]
-  # - [0., 0., 100]
-R_weight: 5e-3             # Torque cost
+Q_weight: 1e6              # State cost
+  # - [Q_weight, 0., 0.]
+  # - [0., Q_weight00, 0.]
+  # - [0., 0., Q_weight]
+R_weight: 1                # Torque cost
   
 
 tol_x: 5e-3               # State tolerance -4 DOUBT: why -4?
@@ -70,7 +70,7 @@ reg_term: 1e-6           # Regularization term for analytic safe set constraints
 
 frame_ee: 'gripperMover'     # End-effector frame name
 ee_position: [0.035, 0., 0.] # ee position in in frame_ee 
-ee_ref: [0.7, 0.17, 0.13]    # Reference end-effector position DOUBT: with respect to what?
+ee_ref: [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]    # Reference end-effector position
 #ee_ref: [0.7, 0.4, 0.12] 
 #ee_ref: [0.7, 0.38, 0.10] 
 ee_radius: 0.075             # Radius around the ee reference position
@@ -242,3 +242,31 @@ noise_cm: 0.
 
 joint_bounds_margin: 0.
 collision_margin: 0.
+
+##################################################################################
+
+# Robot & Environment Parameters
+mass: 3.5     # platform mass [kg]
+J:            # platform inertia [kg*m^2]
+- [0.155, 0.0, 0.0]
+- [0.0, 0.147, 0.0]
+- [0.0, 0.0, 0.251]
+l: 0.385      # length of the arm [m]
+cf: 1.5e-3    # thrust coefficient [N/(Hz)^2]
+ct: 4.590e-5  # torque coefficient [Nm/(Hz)^2]
+max_w: 108    # max spinning rate [Hz]
+alpha_tilt: 20     # Tilt cant angle [degree]
+
+min_width: 0.525  # width/2 of the platform [m]
+min_length: 0.475 # length/2 of the platform [m]
+min_height: 0.2   # height/2 of the platform [m]
+
+max_width: 1 # max width/2 of the environment [m]
+max_length: 1 # max length/2 of the environment [m]
+max_height: 1 # min width/2 of the environment [m]
+
+v_min: [-5, -5, -6, -12.2, -12.2, -12.2]  # min initial velocity [m/s, rad/s]  for box dimensions 1x1x1
+v_max: [5, 5, 6, 12.2, 12.2, 12.2]       # max initial velocity [m/s, rad/s] for box dimensions 1x1x1
+
+# Data generation
+orient_g_rej: true # select orientation with gravity rejection

@@ -8,11 +8,11 @@ import torch
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', '--system', type=str, default='z1',
-                        help='Systems to test. Available: pendulum, double_pendulum, ur5, z1')
+    parser.add_argument('-s', '--system', type=str, default='sth',
+                        help='Systems to test. Available: pendulum, double_pendulum, ur5, z1, sth')
     parser.add_argument('-d', '--dofs', type=int, default=4,
                         help='Number of desired degrees of freedom of the system')
-    parser.add_argument('-c', '--controller', type=str, default='naive',
+    parser.add_argument('-c', '--controller', type=str, default='naiveSth',
                         help='Controllers to test. Available: naive, st, stwa, htwa, receding')
     parser.add_argument('-b', '--build', action='store_true',
                         help='Build the code of the embedded controller')
@@ -22,7 +22,8 @@ def parse_args():
                         help='Horizon of the optimal control problem')
     parser.add_argument('-a', '--activation', type=str, default='gelu',
                         help='Activation function for the neural network')
-    parser.add_argument('--back_hor',type=int,default=45,help='Horizon of the backup controller')
+    parser.add_argument('--back_hor',type=int,default=45,
+                        help='Horizon of the backup controller')
     parser.add_argument('--noise', type=float, default=0.,
                         help='Noise in the model dynamics')
     parser.add_argument('--control_noise', type=float, default=0.,
@@ -60,6 +61,7 @@ def align_vectors(a, b):
 class Parameters:
     def __init__(self, args, urdf_name, rti=True, filename=None):
         self.urdf_name = urdf_name
+        self.robot_name = urdf_name
         # Define all the useful paths
         self.PKG_DIR = os.path.dirname(os.path.abspath(__file__))
         self.ROOT_DIR = self.PKG_DIR.split('/src/safe_mpc')[0]
@@ -77,9 +79,9 @@ class Parameters:
 
         self.robot_urdf = f'{self.ROBOTS_DIR}/{urdf_name}_description/urdf/{urdf_name}.urdf'
 
-        self.robot_descr = URDF.from_xml_file(self.robot_urdf)
-        self.links = [self.robot_descr.links[i].name for i in range(len(self.robot_descr.links))]
-        self.joints = [self.robot_descr.joints[i] for i in range(len(self.robot_descr.joints))]
+        # self.robot_descr = URDF.from_xml_file(self.robot_urdf)
+        # self.links = [self.robot_descr.links[i].name for i in range(len(self.robot_descr.links))]
+        # self.joints = [self.robot_descr.joints[i] for i in range(len(self.robot_descr.joints))]
         
         self.test_num = int(parameters['test_num'])
         self.n_steps = int(parameters['n_steps'])
@@ -166,59 +168,83 @@ class Parameters:
         # collision pairs
 
         # obstacles
-        self.obstacles = []
-        for obstacle in parameters['obstacles']:
-            obs=dict()
-            for entry in obstacle:
-                if type(obstacle[entry]) == list: obs[entry] = np.array(obstacle[entry]).astype(float)
-                else: obs[entry] = obstacle[entry]
-            if obs['type'] == 'plane':
-                obs['bounds'][0] -= self.collision_margin
-                obs['bounds'][1] += self.collision_margin
-            elif obs['type'] == 'sphere-obs':
-                obs['radius'] -= self.collision_margin
-            self.obstacles.append(obs)
+        # self.obstacles = []
+        # for obstacle in parameters['obstacles']:
+        #     obs=dict()
+        #     for entry in obstacle:
+        #         if type(obstacle[entry]) == list: obs[entry] = np.array(obstacle[entry]).astype(float)
+        #         else: obs[entry] = obstacle[entry]
+        #     if obs['type'] == 'plane':
+        #         obs['bounds'][0] -= self.collision_margin
+        #         obs['bounds'][1] += self.collision_margin
+        #     elif obs['type'] == 'sphere-obs':
+        #         obs['radius'] -= self.collision_margin
+        #     self.obstacles.append(obs)
 
-        # capsules
-        # robot capsules
-        self.robot_capsules = []
-        if parameters['robot_capsules'] != None:
-            for capsule in parameters['robot_capsules']:
-                self.robot_capsules.append(self.create_moving_capsule(capsule))
-                self.robot_capsules[-1]['radius'] -= self.collision_margin
-        # fixed capsule
-        self.obst_capsules = []
-        if parameters['obstacles_capsules'] != None:
-            for capsule in parameters['obstacles_capsules']:
-                self.obst_capsules.append(self.create_fixed_capsule(capsule))
-                self.obst_capsules[-1]['radius'] -= self.collision_margin
+        # # capsules
+        # # robot capsules
+        # self.robot_capsules = []
+        # if parameters['robot_capsules'] != None:
+        #     for capsule in parameters['robot_capsules']:
+        #         self.robot_capsules.append(self.create_moving_capsule(capsule))
+        #         self.robot_capsules[-1]['radius'] -= self.collision_margin
+        # # fixed capsule
+        # self.obst_capsules = []
+        # if parameters['obstacles_capsules'] != None:
+        #     for capsule in parameters['obstacles_capsules']:
+        #         self.obst_capsules.append(self.create_fixed_capsule(capsule))
+        #         self.obst_capsules[-1]['radius'] -= self.collision_margin
+        # # self.spheres on robot
+        # self.spheres_robot = []
+        # if parameters['spheres_robot'] != None:
+        #     for sphere_robot in parameters['spheres_robot']:
+        #         sphere=dict()
+        #         for entry in sphere_robot:
+        #             sphere[entry] = sphere_robot[entry]
+        #         self.spheres_robot.append(sphere)
+        #         self.spheres_robot[-1]['radius'] -= self.collision_margin
 
-        # self.spheres on robot
-        self.spheres_robot = []
-        if parameters['spheres_robot'] != None:
-            for sphere_robot in parameters['spheres_robot']:
-                sphere=dict()
-                for entry in sphere_robot:
-                    sphere[entry] = sphere_robot[entry]
-                self.spheres_robot.append(sphere)
-                self.spheres_robot[-1]['radius'] -= self.collision_margin
+        # self.collisions_pairs = []
+        # # assign pairs
+        # if parameters['collision_pairs'] == None:
+        #     for capsule_one in self.robot_capsules:
+        #         for capsule_two in self.robot_capsules:
+        #             if capsule_one['name'] != capsule_two['name']:
+        #                 self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],capsule_two['name'], self.obstacles, self.robot_capsules))
+        #         for capsule_two in self.obst_capsules:
+        #             self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],capsule_two['name'], self.obstacles, self.obst_capsules))
+        #         for obst in self.obstacles:
+        #             self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],obst['name'], self.obstacles, self.obstacles))
+        # else:
+        #     for pair in parameters['collision_pairs']:
+        #         self.collisions_pairs.append(self.assign_pairs(pair[0],pair[1],self.obstacles,self.robot_capsules+self.obst_capsules,self.spheres_robot))
 
-        self.collisions_pairs = []
-        # assign pairs
-        if parameters['collision_pairs'] == None:
-            for capsule_one in self.robot_capsules:
-                for capsule_two in self.robot_capsules:
-                    if capsule_one['name'] != capsule_two['name']:
-                        self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],capsule_two['name'], self.obstacles, self.robot_capsules))
-                for capsule_two in self.obst_capsules:
-                    self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],capsule_two['name'], self.obstacles, self.obst_capsules))
-                for obst in self.obstacles:
-                    self.collisions_pairs.append(self.assign_pairs(capsule_one['name'],obst['name'], self.obstacles, self.obstacles))
-        else:
-            for pair in parameters['collision_pairs']:
-                self.collisions_pairs.append(self.assign_pairs(pair[0],pair[1],self.obstacles,self.robot_capsules+self.obst_capsules,self.spheres_robot))
+        # self.track_traj = bool(parameters['track_traj'])
 
-        self.track_traj = bool(parameters['track_traj'])
+        # robot parameters
+
+        self.mass = float(parameters['mass'])
+        self.J = np.array(parameters['J'])
+        self.l = float(parameters['l'])
+        self.cf = float(parameters['cf'])
+        self.ct = float(parameters['ct'])
+        self.u_bar = float(parameters['max_w'])**2
+        self.alpha_tilt = np.deg2rad((float(parameters['alpha_tilt'])))
+
+        self.min_width = float(parameters['min_width'])
+        self.min_length = float(parameters['min_length'])
+        self.min_height = float(parameters['min_height'])
+
+        self.max_width = float(parameters['max_width'])
+        self.max_length = float(parameters['max_length'])
+        self.max_height = float(parameters['max_height'])
+
+        self.v_min = np.array(parameters['v_min'])
+        self.v_max = np.array(parameters['v_max'])
+
+        self.orient_g_rej = bool(parameters['orient_g_rej'])
+
+
 
 
     def create_moving_capsule(self,capsule):

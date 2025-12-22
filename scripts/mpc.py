@@ -9,8 +9,9 @@ from safe_mpc.cost_definition import *
 import sys
 
 
-CALLBACK = True
+CALLBACK = True # Enable debug prints during simulation
 
+### SETUP AND CONFIGURATION ###
 args = parse_args()
 model_name = args['system']
 params = Parameters(args,model_name, rti=True)
@@ -25,11 +26,10 @@ horizon = args['horizon']
 params.N=horizon
 model = AdamModel(params)
 
-
 model.ee_ref = params.ee_ref
 nq = model.nq
 
-print(f'\n q_min: {model.x_min},      q_max: {model.x_max} \n')
+print(f'\n q_min: {model.x_min}, q_max: {model.x_max} \n')
 
 params.noise_mass = args['noise']
 params.noise_inertia = args['noise']
@@ -37,6 +37,7 @@ params.noise_cm = args['noise']
 params.control_noise = args['control_noise']
 build_controllers=args['build']
 
+### DEFINITION OF CONTROLLER AND SAFE ABORT CONTROLLER ###
 cont_name = args['controller']
 controller = get_controller(cont_name, model)
 # cost_controller = TrackingMovingCircleNLS(model,params.Q_weight,params.R_weight)
@@ -46,7 +47,7 @@ controller = get_controller(cont_name, model)
 #     print('Cost NLS')
 # else:    
 print('Cost EXT')
-cost_controller = ReachTargetEXT(model,params.Q_weight,params.R_weight)
+cost_controller = ReachTargetEXT(model,params.Q_weight, params.R_weight)
 
 cost_controller.set_solver_cost(controller)
 controller.build_controller(build_controllers)
@@ -83,8 +84,7 @@ x_guess = data['xg']
 u_guess = data['ug']
 x_init = x_guess[:,0,:]
 
-
-# MPC simulation 
+### MPC SIMULATION LOOP ###
 conv_idx, collisions_idx, viable_idx = [], [], []
 x_sim_list, u_list, r_list, x_viable = [], [], [], []
 stats = []
@@ -99,7 +99,7 @@ print(x_init.shape[0])
 
 failures=0
 
-for i in range(0,params.test_num):#x_init.shape[0]):
+for i in range(0,params.test_num): # x_init.shape[0]):
     # randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=args['controller'])
     # controller.model.update_randomized_dynamics(controller_name=args['controller'])
     # safe_ocp.model.update_randomized_dynamics(controller_name=args['controller'])

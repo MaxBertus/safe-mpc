@@ -33,8 +33,8 @@ class AbstractController:
 
         # Cost
         self.cost = None
-        
-        self.ocp.parameter_values = np.hstack([self.model.ee_ref, [self.model.params.alpha, 1.]])
+
+        self.ocp.parameter_values = np.hstack([self.model.ee_ref, [self.model.params.alpha, 1.]])   
 
         # Bound constraints
         if self.model.params.noise > 0:
@@ -247,10 +247,10 @@ class AbstractController:
         self.ocp_solver = AcadosOcpSolver(self.ocp, json_file=gen_name + '.json', generate=build, build=build)
         self.build_flag = True
 
-
 class NaiveController(AbstractController):
     def __init__(self, model):
         super().__init__(model)
+        
 
     def checkGuess(self):
         return self.model.checkRunningConstraints(self.x_temp, self.u_temp) and \
@@ -291,6 +291,110 @@ class NaiveController(AbstractController):
     #             return False, None
     #     return self.safe_set.constraints_fun[0](x_sim) >= 0. , x_sim 
     
+class NaiveSthController(AbstractController):
+    def __init__(self, model):
+        self.model = model
+        self.current_step = 0
+
+        self.N = self.model.params.N
+        self.ocp = AcadosOcp()
+        self.build_flag = False
+
+        # Dimensions
+        self.ocp.solver_options.tf = self.model.params.dt * self.N
+        self.ocp.dims.N = self.N
+
+        # Model
+        self.ocp.model = self.model.amodel
+        self.p = cs.MX.sym("p", 8)     #  p[0:6] -> EE reference (where you want to move the EE), p[6] -> Safety margin for the NN model in percentage ex (10% defined as 10), p[7] -> logic variable: 1 to activate the safe set constraint, -1 to deactivate it
+        self.ocp.model.p = self.p
+        self.ee_params = self.p[:6]
+        self.alpha_param = self.p[6]
+        self.cs_if_else_param = self.p[7]
+
+        # Cost
+        self.cost = None
+        self.ocp.parameter_values = np.hstack([self.model.ee_ref, [self.model.params.alpha, 1.]])   # default value for parameters
+
+        # Input constraints
+        self.ocp.constraints.lbu = self.model.u_min
+        self.ocp.constraints.ubu = self.model.u_max
+        self.ocp.constraints.idxbu = np.arange(self.model.nu)
+
+        # State constraints
+        self.ocp.constraints.lbx_0 = np.full(self.model.nx, -1e6)  
+        self.ocp.constraints.ubx_0 = np.full(self.model.nx, 1e6)  
+        self.ocp.constraints.idxbx_0 = np.arange(self.model.nx)
+
+        self.ocp.constraints.lbx = np.full(self.model.nx, -1e6) 
+        self.ocp.constraints.ubx = np.full(self.model.nx, 1e6)  
+        self.ocp.constraints.idxbx = np.arange(self.model.nx)
+
+        self.ocp.constraints.lbx_e = np.full(self.model.nx, -1e6) 
+        self.ocp.constraints.ubx_e = np.full(self.model.nx, 1e6)  
+        self.ocp.constraints.idxbx_e = np.arange(self.model.nx)
+
+        # Solver options
+        self.ocp.solver_options.integrator_type = "ERK"
+        self.ocp.solver_options.hessian_approx = "EXACT"   
+        self.ocp.solver_options.nlp_solver_type = self.model.params.solver_type
+        self.ocp.solver_options.hpipm_mode = self.model.params.solver_mode
+        self.ocp.solver_options.nlp_solver_max_iter = self.model.params.nlp_max_iter
+        self.ocp.solver_options.qp_solver_iter_max = self.model.params.qp_max_iter
+        self.ocp.solver_options.globalization = self.model.params.globalization
+        self.ocp.solver_options.levenberg_marquardt = self.model.params.levenberg_marquardt #if self.model.params.solver_type == 'SQP_RTI' else 0.
+        # self.ocp.solver_options.ext_fun_compile_flags = self.model.params.ext_flag
+        self.ocp.solver_options.exact_hess_constr = 0
+        self.ocp.solver_options.exact_hess_cost = 0
+        self.ocp.solver_options.exact_hess_dyn = 0
+
+        self.reset_controller()        
+
+        # Reference and fails counter
+        self.fails = 0
+
+        # Empty initial guess and temp vectors
+        self.x_guess = np.zeros((self.N + 1, self.model.nx))
+        self.u_guess = np.zeros((self.N, self.model.nu))
+        self.x_temp, self.u_temp = np.copy(self.x_guess), np.copy(self.u_guess)
+
+        # Time stats
+        self.time_fields = ['time_lin', 'time_sim', 'time_qp', 'time_qp_solver_call',
+                            'time_glob', 'time_reg', 'time_tot']
+        self.last_status = 4    
+
+
+    def checkGuess(self):
+        # return self.model.checkRunningConstraints(self.x_temp, self.u_temp) and \
+        #         self.model.checkDynamicsConstraints(self.x_temp, self.u_temp) and \
+        #         np.all([self.model.checkCollision(x) for x in self.x_temp])
+        return self.model.checkInputConstraints(self.u_temp)
+
+    def initialize(self, x0, u0=None):
+        # Trivial guess
+        self.x_guess = np.full((self.N + 1, self.model.nx), x0)
+        if u0 is None:
+            u0 = np.zeros(self.model.nu)
+        self.u_guess = np.full((self.N, self.model.nu), u0)
+        # Solve the OCP
+        status = self.solve(x0)
+        if status == 0 and self.checkGuess():
+            self.x_guess = np.copy(self.x_temp)
+            self.u_guess = np.copy(self.u_temp)
+            return 1
+        return 0
+
+    def step(self, x):
+        # integrate_dynamics for a better guess
+        self.guessCorrection()
+
+        status = self.solve(x)
+        if status == 0:
+            self.fails = 0
+        else:
+            self.fails += 1
+        self.current_step +=1
+        return self.provideControl()    
     
 class TerminalZeroVelocity(NaiveController):
     """ Naive MPC with zero terminal velocity as constraint """
@@ -300,6 +404,30 @@ class TerminalZeroVelocity(NaiveController):
     def additionalSetting(self):
         x_min_e = np.hstack((self.ocp.constraints.lbx[:self.model.nq], np.zeros(self.model.nv)))
         x_max_e = np.hstack((self.ocp.constraints.ubx[:self.model.nq], np.zeros(self.model.nv)))
+
+        self.ocp.constraints.lbx_e = x_min_e
+        self.ocp.constraints.ubx_e = x_max_e
+        self.ocp.constraints.idxbx_e = np.arange(self.model.nx)
+
+    def step(self, x):
+        # integrate_dynamics for a better guess
+        self.guessCorrection()
+        status = self.solve(x)
+        if status == 0: # and (np.abs(self.x_temp[-1,self.model.nq:]<1e-2)).all():
+            self.fails = 0
+        else:
+            self.fails += 1
+        self.current_step +=1
+        return self.provideControl()
+    
+class TerminalZeroVelocitySth(NaiveSthController):
+    """ Naive MPC with zero terminal velocity as constraint """
+    def __init__(self, model):
+        super().__init__(model)
+
+    def additionalSetting(self):
+        x_min_e = np.hstack((-1e6*np.ones(self.model.nq), np.zeros(self.model.nv)))
+        x_max_e = np.hstack((1e6*np.ones(self.model.nq), np.zeros(self.model.nv)))
 
         self.ocp.constraints.lbx_e = x_min_e
         self.ocp.constraints.ubx_e = x_max_e
@@ -358,8 +486,7 @@ class STController(NaiveController):
 
     def reset_controller(self):
         self.current_step = 0
-        self.fails = 0
-        
+        self.fails = 0 
 
 class STWAController(STController):
     def __init__(self, model):
@@ -392,14 +519,12 @@ class STWAController(STController):
         self.u_guess = u_guess
         self.x_viable = x_guess[-1]
 
-
 class HTWAController(STWAController):
     def __init__(self, model):
         super().__init__(model)
 
     def additionalSetting(self):
         self.terminalSetConstraint(soft=False)
-
 
 class RecedingController(STWAController):
     def __init__(self, model):
@@ -687,7 +812,6 @@ class ControllerSafeSetEverywhere(STController):
     def additionalSetting(self):
         self.terminalSetConstraint()
         self.runningSetConstraint()
-
 
 class SafeBackupController(AbstractController):
     def __init__(self, model):

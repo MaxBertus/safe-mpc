@@ -5,37 +5,37 @@ import numpy as np
 from tqdm import tqdm
 from scipy.stats import qmc
 from safe_mpc.parser import Parameters, parse_args
-from safe_mpc.env_model import AdamModel
+from safe_mpc.env_model import AdamModel, SthModel
 from safe_mpc.utils import  get_controller , get_ocp_acados, randomize_model
 from safe_mpc.robot_visualizer import RobotVisualizer
 from safe_mpc.ocp import InverseKinematicsOCP
 import copy
 from safe_mpc.cost_definition import *
+import warnings
+from rich.traceback import install
+install(show_locals=True)
 
+### SETUP & CONFIGURATION ###
 args = parse_args()
-model_name = args['system']
+model_name = args['system'] 
 params = Parameters(args,model_name, rti=False)
-params.q_margin = args['joint_bounds_margin']
-params.collision_margin = args['collision_margin']
+### params.q_margin = args['joint_bounds_margin']               # DOUBT: do I need it in my case?      
+params.collision_margin = args['collision_margin']              # NOTE: margin for the obstacles (normally 0.0)
 params.build = args['build']
 params.solver_type = 'SQP'
-params.act = args['activation']
-params.alpha = args['alpha']
+# params.act = args['activation']
+# params.alpha = args['alpha']                                  # NOTE: safety margin for the NN output
 params.N=args['horizon']
 
-params.noise_mass = args['noise']
-params.noise_inertia = args['noise']
-params.noise_cm = args['noise']
+# params.noise_mass = args['noise']                           
+# params.noise_inertia = args['noise']
+# params.noise_cm = args['noise']                                           
+model = SthModel(params)                                                   
 
-model = AdamModel(params)
-
-# cost = TrackingMovingCircleNLS(model,params.Q_weight,params.R_weight)
-#cost = Tracking8NLS(model,params.Q_weight,params.R_weight)
-cost = ReachTargetEXT(model,params.Q_weight,params.R_weight)
-cost_naive_zerovel = ReachTargetNLS(model,params.Q_weight,params.R_weight)
+cost = ReachTargetEXT(model,params.Q_weight,params.R_weight)                    # NOTE: theoretically, I have to use only this cost
+cost_naive_zerovel = ReachTargetNLS(model,params.Q_weight,params.R_weight) 
 ocp_name = args['controller']
 params.cont_name = args['controller']
-
 build_controllers = args['build']
 
 ocp_with_net, controllers_list = get_ocp_acados(ocp_name, model)
@@ -49,7 +49,7 @@ params_naive.solver_type = 'SQP'
 params_naive.N=args['horizon']
 params_naive.q_margin = args['joint_bounds_margin']
 params_naive.collision_margin = args['collision_margin']
-model_naive = AdamModel(params_naive)
+model_naive = SthModel(params_naive)
 
 params_zerovel = Parameters(args,model_name, rti=False)
 params_zerovel.build = args['build']
@@ -57,32 +57,30 @@ params_zerovel.solver_type = 'SQP'
 params_zerovel.N=args['horizon']
 params_zerovel.q_margin = args['joint_bounds_margin']
 params_zerovel.collision_margin = args['collision_margin']
-model_zerovel = AdamModel(Parameters(args,model_name, rti=False))
+model_zerovel = SthModel(Parameters(args,model_name, rti=False))
 
-ocp_naive,_ = get_ocp_acados('naive',model_naive)
+ocp_naive,_ = get_ocp_acados('naiveSth',model_naive)
 ocp_naive.set_cost(cost_naive_zerovel)
 ocp_naive.build_controller(build = build_controllers)
 ocp_naive.resetHorizon(args['horizon'])
 
-ocp_zerovel,_ = get_ocp_acados('zerovel',model_zerovel)
+ocp_zerovel,_ = get_ocp_acados('zerovelSth',model_zerovel)
 ocp_zerovel.set_cost(cost_naive_zerovel)
 ocp_zerovel.build_controller(build = build_controllers)
 ocp_zerovel.resetHorizon(args['horizon'])
 
+params_naive.test_num = params.test_num 
+params_zerovel.test_num = params.test_num 
 
-params.test_num = 100
-params_naive.test_num = 100
-params_zerovel.test_num = 100
-
-
-num_ics = params.test_num
+num_ics = params.test_num                       # ics = initial conditions
 succ, fails, skip_ics = 0, 0, 0
-sampler = qmc.Halton(model.nq, scramble=False)
+sampler = qmc.Halton(model.nq, scramble=False)  # random generator
 
 x_guess_net, u_guess_net = [], []
 x_guess_naive, u_guess_naive = [], []
 x_guess_zerovel, u_guess_zerovel = [], []
 
+# NOTE: Vizualization disabled for faster data generation: NOT WORKING
 # rviz = RobotVisualizer(params, params.nq)
 # if params.obs_flag:
 #     rviz.addObstacles(params.obstacles)
@@ -91,14 +89,19 @@ x_guess_zerovel, u_guess_zerovel = [], []
 
 print(f'Use network: {ocp_with_net.model.params.use_net}')
 
-TEST_NOISE = True
+TEST_NOISE = False # True # DOUBT: do I have to keep it?
 
+### MAIN LOOP: INITIAL CONDITION GENERATION ###
 progress_bar = tqdm(total=num_ics, desc=f'Generating initial conditions, alpha {ocp_with_net.model.params.alpha}')
 start_time = time.time()
-if not(ocp_with_net.model.params.track_traj):
+
+## STATIC TARGET CASE ##
+if not(ocp_with_net.model.params.track_traj): # NOTE: theoretically, it is my case. I do not use a reference trajectory but a final target pose
     while succ < num_ics:
 
-        q0 = qmc.scale(sampler.random(), model.x_min[:model.nq], model.x_max[:model.nq])[0]
+        q0 = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+        #q0 = qmc.scale(sampler.random(), model.x_min[:model.nq], model.x_max[:model.nq])[0]
         if TEST_NOISE:
             #q0 = np.array([-0.6,2.513,-2.3,0.272])
             q0 = np.array([-0.3,0.8,-1.65,0.658, 0.])
@@ -106,10 +109,14 @@ if not(ocp_with_net.model.params.track_traj):
         x0 = np.zeros((model.nx,))
         x0[:model.nq] = q0
 
-        #rviz.displayWithEESphere(x0[:params.nq],params.robot_capsules+params.obst_capsules,params.spheres_robot)
-        if ocp_with_net.model.checkCollision(x0):
+        # rviz.displayWithEESphere(x0[:params.nq],params.robot_capsules+params.obst_capsules,params.spheres_robot)
+        
+        # if ocp_with_net.model.checkCollision(x0): # if checkCollision(...) == true ---> no collision
+        if True:
             print(f'accepted:{x0}')
-            u0_g = np.array([np.zeros((model.nu,))]*ocp_with_net.N)
+            # u0_g = np.array([np.zeros((model.nu,))]*ocp_with_net.N)
+            u0_g = np.linalg.pinv(model.R(x0).full() @ model.F) @ np.array([0, 0, model.mass * model.g])
+            u0_g = np.full((ocp_with_net.N, model.nu), u0_g)
             x0_g = np.array([x0]*(args['horizon']+1))
             ocp_with_net.setGuess(x0_g,u0_g)
 
@@ -165,6 +172,8 @@ if not(ocp_with_net.model.params.track_traj):
             print(f'Skipped:{x0}')
             time.sleep(5)
             skip_ics += 1
+
+## TRAJECTORY CASE ##
 else:
     rviz.addTraj(ocp_with_net.cost.traj)
     rviz.vizTraj(ocp_with_net.cost.traj)
@@ -175,7 +184,6 @@ else:
         ocp_with_net.model.update_randomized_dynamics()
         ocp_naive.model.update_randomized_dynamics()
         ocp_zerovel.model.update_randomized_dynamics()
-
 
         InvKynSolver = InverseKinematicsOCP(model,ocp_with_net.cost.traj[:,0])
         solver_inv = InvKynSolver.instantiateProblem()
@@ -226,9 +234,9 @@ else:
         else:
             print('FAILED')
 
-
 progress_bar.close()
 
+### SAVING ###
 os.makedirs(params.DATA_DIR, exist_ok=True)
 
 print(f'Number of failed initializations: {fails}')
@@ -236,9 +244,9 @@ print(f'Number of skipped initial conditions: {skip_ics}')
 
 traj__track = 'traj_track' if ocp_with_net.model.params.track_traj else ""
 
-with open(f'{params.DATA_DIR}{model_name}_naive_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_naive.model.params.use_net}_{traj__track}_q_collision_margins_{params_naive.q_margin}_{params_naive.collision_margin}_guess.pkl', 'wb') as f:
+with open(f'{params.DATA_DIR}{model_name}_naiveSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_naive.model.params.use_net}_{traj__track}_q_collision_margins_{params_naive.q_margin}_{params_naive.collision_margin}_guess.pkl', 'wb') as f:
         pickle.dump({'xg': np.asarray(x_guess_naive), 'ug': np.asarray(u_guess_naive)}, f)
-with open(f'{params.DATA_DIR}{model_name}_zerovel_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_zerovel.model.params.use_net}_{traj__track}_q_collision_margins_{params_zerovel.q_margin}_{params_zerovel.collision_margin}_guess.pkl', 'wb') as f:
+with open(f'{params.DATA_DIR}{model_name}_zerovelSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_zerovel.model.params.use_net}_{traj__track}_q_collision_margins_{params_zerovel.q_margin}_{params_zerovel.collision_margin}_guess.pkl', 'wb') as f:
         pickle.dump({'xg': np.asarray(x_guess_zerovel), 'ug': np.asarray(u_guess_zerovel)}, f)
 
 if (args['controller']!= 'naive' and args['controller']!= 'zerovel'):
@@ -247,7 +255,7 @@ if (args['controller']!= 'naive' and args['controller']!= 'zerovel'):
             with open(f'{params.DATA_DIR}{model_name}_{cont}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_{params.q_margin}_{params.collision_margin}_guess.pkl', 'wb') as f:
                 pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
 
-
+### TIME METRICS 
 elapsed_time = time.time() - start_time
 hours = int(elapsed_time // 3600)
 minutes = int((elapsed_time % 3600) // 60)

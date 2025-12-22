@@ -23,10 +23,6 @@ class RandomGenerator:
 
 rng1 = RandomGenerator()
 
-    
-
-
-
 ### METHODS ###
 
 def get_ocp(ocp_name, model) -> NaiveOCP:
@@ -45,7 +41,9 @@ def get_ocp(ocp_name, model) -> NaiveOCP:
     
 def get_ocp_acados(cont_name, model) -> AbstractController:
     controllers = { 'naive': NaiveController,
+                    'naiveSth': NaiveSthController,
                     'zerovel': TerminalZeroVelocity,
+                    'zerovelSth': TerminalZeroVelocitySth,
                     'st': HTWAController,
                     'htwa': HTWAController,
                     'receding': HTWAController,

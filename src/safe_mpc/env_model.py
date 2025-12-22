@@ -5,7 +5,7 @@ from urdf_parser_py.urdf import URDF
 import adam
 from adam.casadi import KinDynComputations
 import casadi as cs
-from casadi import MX, vertcat, Function
+from casadi import MX, vertcat, Function, DM, horzcat, dot, sin, cos, tan, cross, fabs, sqrt
 from acados_template import AcadosModel
 import scipy.linalg as lin
 import torch.nn as nn
@@ -33,10 +33,9 @@ class AdamModel:
 
         self.rng = np.random.default_rng(seed=0)
 
+        #randomize_model(params.robot_urdf, noise_mass = 0, noise_inertia = 0, noise_cm_position = 0) # NOTE: now is out of this class
 
-        #randomize_model(params.robot_urdf, noise_mass = 0, noise_inertia = 0, noise_cm_position = 0)
-
-        # Formal assumed model, used by controller
+        # Formal assumed model, used by controller # NOTE: maybe I have to skip this part
         self.kin_dyn = KinDynComputations(params.robot_urdf, joint_names, self.params.robot_descr.get_root())        
         self.kin_dyn.set_frame_velocity_representation(adam.Representations.MIXED_REPRESENTATION)
         self.mass = self.kin_dyn.mass_matrix_fun()                           # Mass matrix
@@ -44,7 +43,7 @@ class AdamModel:
         self.gravity = self.kin_dyn.gravity_term_fun()                       # Gravity vector
         self.fk = self.kin_dyn.forward_kinematics_fun(params.frame_name)     # Forward kinematics
 
-        # Model with noise
+        # Model with noise # NOTE: maybe I have to skip this part
         self.kin_dyn_noisy = KinDynComputations(params.robot_urdf, joint_names, self.params.robot_descr.get_root())        
         self.kin_dyn_noisy.set_frame_velocity_representation(adam.Representations.MIXED_REPRESENTATION)
         self.mass_noisy = self.kin_dyn_noisy.mass_matrix_fun()                           # Mass matrix
@@ -59,7 +58,7 @@ class AdamModel:
         self.x_dot = MX.sym("x_dot", nq * 2)
         self.u = MX.sym("u", nq)
         
-        # Double integrator
+        # Double integrator # NOTE: here I have to put the dynamics of the robot
         self.f_disc = vertcat(
             self.x[:nq] + params.dt * self.x[nq:] + 0.5 * params.dt**2 * self.u,
             self.x[nq:] + params.dt * self.u
@@ -82,7 +81,7 @@ class AdamModel:
                    self.bias(H_b, self.x[:nq], np.zeros(6), self.x[nq:])[6:]
         self.tau_fun = Function('tau', [self.x, self.u], [self.tau])
 
-        # Noisy dynamics
+        # Noisy dynamics 
         H_b = np.eye(4)
         self.tau_noisy = self.mass_noisy(H_b, self.x[:nq])[6:, 6:] @ self.u + \
                    self.bias_noisy(H_b, self.x[:nq], np.zeros(6), self.x[nq:])[6:]
@@ -239,7 +238,7 @@ class AdamModel:
                 if not(pair[1]<=pair[0](x_tmp[i])<=pair[2]):
                     # print(f'collision: {pair[0].name()}')
                     return False
-            return True
+            return True                                         # DOUBT: is this correct?
 
     def generate_NLconstraints_list(self):
         """
@@ -327,3 +326,158 @@ class AdamModel:
 
     def reset_seed(self,seed):
         self.rng = np.random.default_rng(seed=seed) 
+
+class SthModel(AdamModel):
+    def __init__(self, params):
+        # super().__init__(params)
+
+        self.params = params
+        
+        # System parameters
+        self.mass = params.mass
+        self.J = params.J
+        self.l = params.l 
+        self.cf = params.cf
+        self.ct = params.ct
+        self.r = self.cf / self.ct * self.l
+        self.g = 9.81
+        self.u_bar = params.u_bar 
+        self.alpha_tilt = params.alpha_tilt
+        self.min_width = params.min_width
+        self.min_length = params.min_length
+        self.min_height = params.min_height
+        self.max_width = params.max_width
+        self.max_length = params.max_length
+        self.max_height = params.max_height
+        self.v_min = params.v_min
+        self.v_max = params.v_max
+        # self.eps = params.state_tol
+
+        nq = 6 # dimension of pose: 3 for position, 3 for orientation (Euler Angles) 
+        nu = 6 # dimension of input: 6 squared spinning rates
+        npos = 3 # dimension of positon
+        nori = 3 # dimension of orientation
+        nbox = 6 # dimension of box parameters
+
+        self.x = MX.sym("x", nq * 2)
+        self.x_dot = MX.sym("x_dot", nq * 2)
+        self.u = MX.sym("u", nu)
+        self.p = MX.sym("p", nq)
+            
+        self.t_glob = self.x[0:nq]
+        self.ee_ref = params.ee_ref
+
+        # Rotation matrix 
+        euler_angles = self.x[npos:npos+nori] 
+        roll, pitch, yaw = euler_angles[0], euler_angles[1], euler_angles[2]
+
+        R_x = vertcat(
+            horzcat(1, 0, 0),
+            horzcat(0, cos(roll), -sin(roll)),
+            horzcat(0, sin(roll), cos(roll)))
+
+        R_y = vertcat(
+                horzcat(cos(pitch), 0, sin(pitch)),
+                horzcat(0, 1, 0),
+                horzcat(-sin(pitch), 0, cos(pitch)))
+        
+        R_z = vertcat(
+            horzcat(cos(yaw), -sin(yaw), 0),
+            horzcat(sin(yaw), cos(yaw), 0),
+            horzcat(0, 0, 1))
+
+        R_tot = R_z @ R_y @ R_x
+
+        self.R = Function('R', [self.x], [R_tot])
+
+        # F and M matrices
+        sin_a = np.sin(self.alpha_tilt)
+        cos_a = np.cos(self.alpha_tilt)
+        tan_a = np.tan(self.alpha_tilt)
+
+        self.F = self.cf * np.array([
+        [0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a, 0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a],
+        [sin_a, -1/2 * sin_a, -1/2 * sin_a, sin_a, -1/2 * sin_a, -1/2 * sin_a],
+        [cos_a, cos_a, cos_a, cos_a, cos_a, cos_a]
+        ])
+
+        self.M = self.ct * np.array([
+            [0, np.sqrt(3)/2 * self.r * cos_a - np.sqrt(3)/2 * sin_a, np.sqrt(3)/2 * self.r * cos_a - np.sqrt(3)/2 * sin_a, 0, -np.sqrt(3)/2 * self.r * cos_a + np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * self.r * cos_a + np.sqrt(3)/2 * sin_a],
+            [-self.r * cos_a + sin_a, -1/2 * self.r * cos_a + 1/2 * sin_a, 1/2 * self.r * cos_a - 1/2 * sin_a, self.r * cos_a - sin_a, 1/2 * self.r * cos_a - 1/2 * sin_a, -1/2 * self.r * cos_a + 1/2 * sin_a],
+            [self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a]
+        ])
+
+        # Control force and torque
+        self.fc = Function('fc', [self.x, self.u], [self.R(self.x) @ self.F @ self.u])
+        self.tc = Function('tc', [self.u], [self.M @ self.u])
+
+        Tinv_expr = vertcat(
+            horzcat(1, sin(roll)*tan(pitch), cos(roll)*tan(pitch)),
+            horzcat(0, cos(roll), -sin(roll)),
+            horzcat(0, sin(roll)/cos(pitch), cos(roll)/cos(pitch)))
+
+        self.Tinv = Function('Tinv', [self.x], [Tinv_expr])
+
+        # explicit dynamics
+        self.f_expl = vertcat(
+            self.x[nq:nq+npos],
+            self.Tinv(self.x)@self.x[nq+npos:],
+            -self.g*np.array([[0], [0], [1]]) + self.fc(self.x, self.u)/self.mass, 
+            np.linalg.inv(self.J) @ (-cross(self.x[nq+npos:], self.J @ self.x[nq+npos:])) + np.linalg.inv(self.J) @ self.tc(self.u)
+        )
+
+        # explicit dynamics function
+        self.f_expl_func = Function('f_expl', [self.x, self.u], [self.f_expl])
+
+        # BOUNDS
+        # Input 
+        self.u_max = np.array([self.u_bar, self.u_bar, self.u_bar, self.u_bar, self.u_bar, self.u_bar])
+        self.u_min = np.zeros((nu,))
+
+        # Orientation
+        if self.u_bar >= (self.mass*self.g)/(2*self.cf*cos_a):
+            ri = abs(-self.mass*self.g/2 * tan_a)
+            ro = self.mass*self.g * tan_a
+        elif (self.mass*self.g)/(4*self.cf*cos_a) <= self.u_bar < (self.mass*self.g)/(2*self.cf*cos_a):
+            ri = min(abs(-self.mass*self.g/2 * tan_a), abs(3*self.cf*self.u_bar*sin_a -self.mass*self.g/2 * tan_a))   
+            ro = np.linalg.norm(np.array([np.sqrt(3)*self.cf*self.u_bar*sin_a, self.mass*self.g * tan_a - 3*self.cf*self.u_bar*sin_a]))
+        else:
+            ri = 3*self.cf*self.u_bar*sin_a - self.mass*self.g/2 * tan_a
+            ro = self.mass * self.g * tan_a - 6* self.cf * self.u_bar * sin_a
+
+        self.phi_hovering = np.arctan2(ri, self.mass * self.g) # max inclination allowed for hovering
+        self.phi_hovering_max = np.arctan2(ro, self.mass * self.g) # max inclination allowed for hovering 
+        self.phi_max = np.arccos((self.mass*self.g)/(self.cf * 6 * np.cos(self.alpha_tilt)*self.u_bar))
+
+        # print("phi_hovering: ", np.rad2deg(self.phi_hovering))
+        # print("phi_hovering_max: ", np.rad2deg(self.phi_hovering_max))
+        # print("phi_max: ", np.rad2deg(self.phi_max))
+
+        # Position
+        # Define symbolic parameters for the box bounds
+        self.box_min = MX.sym("box_min", 3)  # [box_min_x, box_min_y, box_min_z]
+        self.box_max = MX.sym("box_max", 3)  # [box_max_x, box_max_y, box_max_z]
+
+        self.env_dimensions = np.array([-self.max_width, -self.max_length, -self.max_height,
+                                        self.max_width, self.max_length, self.max_height]) 
+
+        # Acados model
+        self.amodel = AcadosModel()
+        self.amodel.name = params.robot_name
+        self.amodel.x = self.x
+        self.amodel.u = self.u
+        self.amodel.f_expl_expr = self.f_expl
+        self.amodel.p = self.p
+        
+        self.nx = self.amodel.x.size()[0]
+        self.nu = self.amodel.u.size()[0]
+        self.ny = self.nx + self.nu
+        self.nq = nq
+        self.nv = nq
+        self.npos = npos
+        self.nori = nori
+        self.nbox = nbox
+
+    def checkInputConstraints(self,u):
+        return np.all(np.logical_and(u >= self.u_min, 
+                                     u <= self.u_max))

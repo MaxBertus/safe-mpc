@@ -66,7 +66,7 @@ class ReachTargetNLS(AbstractCost):
         self.traj = np.tile(self.model.params.ee_ref, (self.model.params.n_steps + 1 + self.model.params.N, 1)).T
 
     def set_cost_expr(self,controller):
-        controller.ocp.model.cost_y_expr_0 = cs.vertcat(controller.model.t_glob - controller.ee_params,controller.model.u)
+        controller.ocp.model.cost_y_expr_0 = cs.vertcat(controller.model.t_glob - controller.ee_params, controller.model.u)
         controller.ocp.cost.W_0 = lin.block_diag(self.Q*np.eye(controller.model.t_glob.shape[0]),
                                                       self.R*np.eye(controller.model.nu))
         controller.ocp.cost.yref_0 = np.zeros((controller.model.t_glob.shape[0] + controller.model.nu,))
@@ -80,7 +80,7 @@ class ReachTargetNLS(AbstractCost):
         controller.ocp.cost.yref_e = np.zeros((controller.model.t_glob.shape[0],))
 
 class ReachTargetEXT(AbstractCost):
-    def __init__(self, model,Q,R):
+    def __init__(self, model, Q, R):
         super().__init__(model)
         self.Q = Q
         self.R = R
@@ -90,7 +90,7 @@ class ReachTargetEXT(AbstractCost):
     def set_cost_expr(self,controller):
         t_glob = controller.model.t_glob
         delta = t_glob - controller.ee_params    #controller.model.ee_ref
-        track_ee = delta.T @ (self.Q * np.eye(3)) @ delta 
+        track_ee = delta.T @ (self.Q * np.eye(controller.model.t_glob.shape[0])) @ delta 
         controller.ocp.model.cost_expr_ext_cost = track_ee + controller.model.u.T @ (self.R * np.eye(controller.model.nu)) @ controller.model.u
         controller.ocp.model.cost_expr_ext_cost_e = track_ee
     
