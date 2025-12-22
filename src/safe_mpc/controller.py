@@ -334,6 +334,8 @@ class NaiveSthController(AbstractController):
         self.ocp.constraints.ubx_e = np.full(self.model.nx, 1e6)  
         self.ocp.constraints.idxbx_e = np.arange(self.model.nx)
 
+        self.additionalSetting()
+
         # Solver options
         self.ocp.solver_options.integrator_type = "ERK"
         self.ocp.solver_options.hessian_approx = "EXACT"   
@@ -825,6 +827,28 @@ class SafeBackupController(AbstractController):
         # Terminal constraint --> zero velocity
         q_fin_lb = np.hstack([self.model.x_min[:self.model.nq], np.zeros(self.model.nv)])
         q_fin_ub = np.hstack([self.model.x_max[:self.model.nq], np.zeros(self.model.nv)])
+
+        self.ocp.constraints.lbx_e = q_fin_lb
+        self.ocp.constraints.ubx_e = q_fin_ub
+        self.ocp.constraints.idxbx_e = np.arange(self.model.nx)
+
+        # Options
+        self.ocp.solver_options.ext_fun_compile_flags = '-O3'
+        self.ocp.solver_options.levenberg_marquardt = 0.   # Set Default
+        self.ocp.solver_options.nlp_solver_max_iter = 20
+
+class SafeBackupSthController(NaiveSthController):
+    def __init__(self, model):
+        super().__init__(model)
+
+    def additionalSetting(self):
+        self.N = 45
+        #self.ocp.solver_options.tf = self.model.params.dt * self.N
+        #self.ocp.dims.N = self.N
+
+        # Terminal constraint --> zero velocity
+        q_fin_lb = np.hstack([np.full(self.model.nq, -1e6)  , np.zeros(self.model.nv)])
+        q_fin_ub = np.hstack([np.full(self.model.nq, 1e6)  , np.zeros(self.model.nv)])
 
         self.ocp.constraints.lbx_e = q_fin_lb
         self.ocp.constraints.ubx_e = q_fin_ub

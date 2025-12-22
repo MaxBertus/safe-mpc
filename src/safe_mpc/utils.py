@@ -61,7 +61,9 @@ def get_ocp_acados(cont_name, model) -> AbstractController:
 
 def get_controller(cont_name, model) -> AbstractController:
     controllers = { 'naive': NaiveController,
+                    'naiveSth': NaiveSthController,
                     'zerovel': TerminalZeroVelocity,
+                    'zerovelSth': TerminalZeroVelocitySth,
                     'st': STController,
                     'htwa': HTWAController,
                     'receding': RecedingController,

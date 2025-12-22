@@ -428,6 +428,7 @@ class SthModel(AdamModel):
 
         # explicit dynamics function
         self.f_expl_func = Function('f_expl', [self.x, self.u], [self.f_expl])
+        self.f_fun = self.f_expl_func
 
         # BOUNDS
         # Input 

@@ -2,11 +2,14 @@ import pickle
 import numpy as np
 from functools import reduce
 from safe_mpc.parser import Parameters, parse_args
-from safe_mpc.env_model import AdamModel
+from safe_mpc.env_model import AdamModel, SthModel
 from safe_mpc.utils import get_controller, randomize_model
-from safe_mpc.controller import SafeBackupController
+from safe_mpc.controller import SafeBackupSthController
 from safe_mpc.cost_definition import *
 import sys
+from rich.traceback import install
+install(show_locals=True)
+
 
 
 CALLBACK = True # Enable debug prints during simulation
@@ -15,8 +18,8 @@ CALLBACK = True # Enable debug prints during simulation
 args = parse_args()
 model_name = args['system']
 params = Parameters(args,model_name, rti=True)
-params.q_margin = args['joint_bounds_margin']
-params.collision_margin = args['collision_margin']
+# params.q_margin = args['joint_bounds_margin']
+# params.collision_margin = args['collision_margin']
 
 params.build = args['build']
 params.act = args['activation']
@@ -24,17 +27,17 @@ params.alpha = args['alpha']
 params.backhor = args['back_hor']
 horizon = args['horizon']
 params.N=horizon
-model = AdamModel(params)
+model = SthModel(params)
 
 model.ee_ref = params.ee_ref
 nq = model.nq
 
-print(f'\n q_min: {model.x_min}, q_max: {model.x_max} \n')
+# print(f'\n q_min: {model.x_min}, q_max: {model.x_max} \n')
 
-params.noise_mass = args['noise']
-params.noise_inertia = args['noise']
-params.noise_cm = args['noise']
-params.control_noise = args['control_noise']
+# params.noise_mass = args['noise']
+# params.noise_inertia = args['noise']
+# params.noise_cm = args['noise']
+# params.control_noise = args['control_noise']
 build_controllers=args['build']
 
 ### DEFINITION OF CONTROLLER AND SAFE ABORT CONTROLLER ###
@@ -53,14 +56,14 @@ cost_controller.set_solver_cost(controller)
 controller.build_controller(build_controllers)
 
 param_backup = Parameters(args,model_name, rti=True)
-param_backup.q_margin = args['joint_bounds_margin']
-param_backup.collision_margin = args['collision_margin']
-param_backup.control_noise = args['control_noise']
+# param_backup.q_margin = args['joint_bounds_margin']
+# param_backup.collision_margin = args['collision_margin']
+# param_backup.control_noise = args['control_noise']
 param_backup.use_net = None
 param_backup.N = args['back_hor']
 param_backup.solver_type = 'SQP_RTI'
-model_backup = AdamModel(param_backup)
-safe_ocp = SafeBackupController(model_backup)
+model_backup = SthModel(param_backup)
+safe_ocp = SafeBackupSthController(model_backup)
 cost_controller_backup = ZeroCost(model_backup)
 cost_controller_backup.set_solver_cost(safe_ocp)
 # if args['controller'] in ['htwa','receding','parallel2']:
@@ -103,9 +106,9 @@ for i in range(0,params.test_num): # x_init.shape[0]):
     # randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=args['controller'])
     # controller.model.update_randomized_dynamics(controller_name=args['controller'])
     # safe_ocp.model.update_randomized_dynamics(controller_name=args['controller'])
-    randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=(f'noise{args["noise"]}_{i}'))
-    controller.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
-    safe_ocp.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
+    # randomize_model(params.robot_urdf, noise_mass = params.noise_mass, noise_inertia = params.noise_inertia, noise_cm_position = params.noise_cm, controller_name=(f'noise{args["noise"]}_{i}'))
+    # controller.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
+    # safe_ocp.model.update_randomized_dynamics(controller_name=(f'noise{args["noise"]}_{i}'))
 
     if i % 10 == 0:
         print(f'Failures: {failures}')
@@ -190,30 +193,44 @@ for i in range(0,params.test_num): # x_init.shape[0]):
                 viable_idx.append(i)
                 x_abort, u_abort = safe_ocp.x_temp, safe_ocp.u_temp
 
-        tau = np.array([model.tau_fun(controller.x_temp[k], controller.u_temp[k]).T for k in range(len(controller.u_temp))])
-        tau = np.array([model.tau_fun(controller.x_guess[k], controller.u_guess[k]).T for k in range(len(controller.u_guess))])
+        # tau = np.array([model.tau_fun(controller.x_temp[k], controller.u_temp[k]).T for k in range(len(controller.u_temp))])
+        # tau = np.array([model.tau_fun(controller.x_guess[k], controller.u_guess[k]).T for k in range(len(controller.u_guess))])
         
-        if not model.checkStateConstraints(controller.x_temp):
-            counters[0] += 1
-            if EVAL:
-                print(f'\tx Bounds violated at step {j}')
-                for k in range(len(controller.x_temp)):
-                    viol = np.min(np.vstack((model.x_max - controller.x_temp[k], controller.x_temp[k] - model.x_min)), axis=0)
-                    if np.any(viol + params.tol_x < 0):
-                        print(f'\t\tState {k} out of bounds: {viol}')
-        if not model.checkTorqueBounds(tau):
+        # if not model.checkStateConstraints(controller.x_temp):
+        #     counters[0] += 1
+        #     if EVAL:
+        #         print(f'\tx Bounds violated at step {j}')
+        #         for k in range(len(controller.x_temp)):
+        #             viol = np.min(np.vstack((model.x_max - controller.x_temp[k], controller.x_temp[k] - model.x_min)), axis=0)
+        #             if np.any(viol + params.tol_x < 0):
+        #                 print(f'\t\tState {k} out of bounds: {viol}')
+        # if not model.checkTorqueBounds(tau):
+        #     counters[1] += 1
+        #     if EVAL:
+        #         print(f'Step: {j}')
+
+        #         print(f'\ttau Bounds violated at step {j}')
+        #         for k in range(len(tau)):
+        #             viol = model.tau_max - np.abs(tau[k])
+        #             if np.any(viol + params.tol_tau < 0):
+        #                 # Collect any violation, taking the minimum (so max violation)
+        #                 tau_viol.append(np.min(viol))
+        #                 print(f'\t\tTorque {k} out of bounds: {viol}')
+
+        if not model.checkInputConstraints(controller.u_temp):
             counters[1] += 1
             if EVAL:
                 print(f'Step: {j}')
 
                 print(f'\ttau Bounds violated at step {j}')
                 for k in range(len(tau)):
-                    viol = model.tau_max - np.abs(tau[k])
-                    if np.any(viol + params.tol_tau < 0):
+                    viol = model.u_bar - np.abs(controller.u_temp[k])
+                    if np.any(viol < 0):
                         # Collect any violation, taking the minimum (so max violation)
                         tau_viol.append(np.min(viol))
                         print(f'\t\tTorque {k} out of bounds: {viol}')
                 
+        # NOT CONSIDERED
         # if not np.all([controller.model.checkCollision(x) for x in controller.x_temp]):
         #     counters[2] += 1
         #     if EVAL:
@@ -230,7 +247,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
         #                     if viol + params.tol_obs < 0:
         #                         print(f'\t\tCollision {k} with ball: {viol}')
 
-        if cont_name not in ['naive', 'zerovel', 'trivial']:
+        if cont_name not in ['naive', 'naiveSth', 'zerovel', 'zerovelSth', 'trivial']:
             r = controller.r if (cont_name == 'receding' or cont_name == 'parallel') else -1
             if not controller.checkSafeConstraints(controller.x_temp[r]):
                 counters[3] += 1
@@ -238,31 +255,31 @@ for i in range(0,params.test_num): # x_init.shape[0]):
                 counters[4] += 1
 
         stats.append(controller.getTime())
-        x_sim[j + 1], _ = model.integrate(x_sim[j], u[j])
+        x_sim[j + 1] = model.integrate_naively(x_sim[j], u[j])
         # print(f'State at problem {i} step {j+1} = {x_sim[j+1]}')
         
 
 
         # Check next state bounds and collision
-        if not model.checkStateBounds(x_sim[j + 1]):   
-            if CALLBACK:
-                print('  FAIL BOUNDS')
-                print(f'\tState {j + 1} violation: {np.min(np.vstack((model.x_max - x_sim[j + 1], x_sim[j + 1] - model.x_min)), axis=0)}')
-                print(f'Solver failures {controller.fails}')
-                print(f'State: {x_sim[j+1]}')
-            failures += 1
+        # if not model.checkStateBounds(x_sim[j + 1]):   
+        #     if CALLBACK:
+        #         print('  FAIL BOUNDS')
+        #         print(f'\tState {j + 1} violation: {np.min(np.vstack((model.x_max - x_sim[j + 1], x_sim[j + 1] - model.x_min)), axis=0)}')
+        #         print(f'Solver failures {controller.fails}')
+        #         print(f'State: {x_sim[j+1]}')
+        #     failures += 1
 
 
-            collisions_idx.append(i)
-            break
-        if not controller.model.checkCollision(x_sim[j + 1]):
-            collisions_idx.append(i)
-            if CALLBACK:
-                print(f'FAIL COLLISION at step {j + 1}')
-                print(f'Solver failures {controller.fails}')
+        #     collisions_idx.append(i)
+        #     break
+        # if not controller.model.checkCollision(x_sim[j + 1]):
+        #     collisions_idx.append(i)
+        #     if CALLBACK:
+        #         print(f'FAIL COLLISION at step {j + 1}')
+        #         print(f'Solver failures {controller.fails}')
             
-            failures += 1
-            break
+        #     failures += 1
+        #     break
         # Check convergence
         if j == params.n_steps -1:
             # if i in viable_idx:
@@ -271,12 +288,23 @@ for i in range(0,params.test_num): # x_init.shape[0]):
             if CALLBACK:
                 print('not converged')
 
-    if np.linalg.norm(model.jointToEE(x_sim[-1]).T - model.ee_ref) < params.tol_conv:
+    # if np.linalg.norm(model.jointToEE(x_sim[-1]).T - model.ee_ref) < params.tol_conv:
+    #     conv_idx.append(i)
+    #     if CALLBACK:
+    #         print('  SUCCESS !!')
+    #     if i in viable_idx:
+    #         viable_idx.remove(i)
+
+    print()
+
+    if np.linalg.norm((x_sim[-1,:6]).T - model.ee_ref) < params.tol_conv:
         conv_idx.append(i)
         if CALLBACK:
             print('  SUCCESS !!')
         if i in viable_idx:
             viable_idx.remove(i)
+
+
     print(f'initial state: {x_sim[0]}')
 
     x_sim_list.append(x_sim), u_list.append(u), r_list.append(r_index)
