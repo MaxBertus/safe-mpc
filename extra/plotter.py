@@ -10,8 +10,8 @@ install(show_locals=True)
 # =========================
 # User parameters
 # =========================
-pkl_file = "../data_noise/sth_naiveSth_45hor_10sm_use_netNone__q_collision_margins_0.0_0.0_guess.pkl"   # <-- change
-Ts = 5e-3                            # control sampling time [s]
+pkl_file = "./data_noise/sth_naiveSth_45hor_10sm_use_netNone__q_collision_margins_0_0_guess.pkl"  
+Ts = 5e-3                               # control sampling time [s]
 u_max = 108**2                          # actuator saturation (if known)
 
 # Optional reference (set to None if unavailable)
@@ -144,10 +144,10 @@ for i in range(3):
 # =========================
 # Animation
 # =========================
-pos = xHistory[:, 0:3]        # (N, 3)
-angles = xHistory[:, 3:6]     # (N, 3)
+# pos = xHistory[:, 0:3]        # (N, 3)
+# angles = xHistory[:, 3:6]     # (N, 3)
 
-animator.animator(pos, angles, dt=Ts, num_steps=N)
+# animator.animator(pos, angles, dt=Ts, num_steps=N)
 
 # =========================
 # Show all figures

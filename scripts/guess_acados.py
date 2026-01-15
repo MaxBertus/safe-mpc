@@ -14,28 +14,51 @@ from safe_mpc.cost_definition import *
 import warnings
 from rich.traceback import install
 install(show_locals=True)
+import subprocess
 
-### SETUP & CONFIGURATION ###
+### SETUP & CONFIGURATION
+## Terminal arguments parsing
 args = parse_args()
 model_name = args['system'] 
+
+## Configuration file reading and parameters setup
 params = Parameters(args,model_name, rti=False)
-### params.q_margin = args['joint_bounds_margin']               # DOUBT: do I need it in my case?      
-params.collision_margin = args['collision_margin']              # NOTE: margin for the obstacles (normally 0.0)
+# params_naive = Parameters(args,model_name, rti=False)
+# params_zerovel = Parameters(args,model_name, rti=False)
+
+params.collision_margin = args['collision_margin']    # NOTE: margin for the obstacles 
 params.build = args['build']
 params.solver_type = 'SQP'
-# params.act = args['activation']
-# params.alpha = args['alpha']                                  # NOTE: safety margin for the NN output
-params.N=args['horizon']
+params.act = args['activation']
+params.alpha = args['alpha']                          # NOTE: safety margin for the NN output
+#params.N=args['horizon']
+params.noise_mass = args['noise']                           
+params.noise_inertia = args['noise']
+params.noise_cm = args['noise']   
 
-# params.noise_mass = args['noise']                           
-# params.noise_inertia = args['noise']
-# params.noise_cm = args['noise']                                           
-model = SthModel(params)                                                   
+# params_naive.build = args['build']
+# params_naive.solver_type = 'SQP'
+# params_naive.N=args['horizon']
+# params_naive.q_margin = args['joint_bounds_margin']
+# params_naive.collision_margin = args['collision_margin']
 
-cost = ReachTargetEXT(model,params.Q_weight,params.R_weight)                    # NOTE: theoretically, I have to use only this cost
-cost_naive_zerovel = ReachTargetNLS(model,params.Q_weight,params.R_weight) 
+# params_zerovel.build = args['build']
+# params_zerovel.solver_type = 'SQP'
+# params_zerovel.N=args['horizon']
+# params_zerovel.q_margin = args['joint_bounds_margin']
+# params_zerovel.collision_margin = args['collision_margin']
+ 
+## Model and environment setup
+model = SthModel(params)           
+# model_naive = SthModel(params_naive)
+# model_zerovel = SthModel(Parameters(args,model_name, rti=False))
+
+## OCP and controller setup
+cost = ReachTargetEXT(model,params.Q_weight,params.R_weight)           
+# cost_naive_zerovel = ReachTargetNLS(model,params.Q_weight,params.R_weight) 
 ocp_name = args['controller']
 params.cont_name = args['controller']
+
 build_controllers = args['build']
 
 ocp_with_net, controllers_list = get_ocp_acados(ocp_name, model)
@@ -43,42 +66,26 @@ ocp_with_net.set_cost(cost)
 ocp_with_net.build_controller(build = build_controllers)
 ocp_with_net.resetHorizon(args['horizon'])
 
-params_naive = Parameters(args,model_name, rti=False)
-params_naive.build = args['build']
-params_naive.solver_type = 'SQP'
-params_naive.N=args['horizon']
-params_naive.q_margin = args['joint_bounds_margin']
-params_naive.collision_margin = args['collision_margin']
-model_naive = SthModel(params_naive)
+# ocp_naive,_ = get_ocp_acados('naiveSth',model_naive)
+# ocp_naive.set_cost(cost_naive_zerovel)
+# ocp_naive.build_controller(build = build_controllers)
+# ocp_naive.resetHorizon(args['horizon'])
 
-params_zerovel = Parameters(args,model_name, rti=False)
-params_zerovel.build = args['build']
-params_zerovel.solver_type = 'SQP'
-params_zerovel.N=args['horizon']
-params_zerovel.q_margin = args['joint_bounds_margin']
-params_zerovel.collision_margin = args['collision_margin']
-model_zerovel = SthModel(Parameters(args,model_name, rti=False))
+# ocp_zerovel,_ = get_ocp_acados('zerovelSth',model_zerovel)
+# ocp_zerovel.set_cost(cost_naive_zerovel)
+# ocp_zerovel.build_controller(build = build_controllers)
+# ocp_zerovel.resetHorizon(args['horizon'])
 
-ocp_naive,_ = get_ocp_acados('naiveSth',model_naive)
-ocp_naive.set_cost(cost_naive_zerovel)
-ocp_naive.build_controller(build = build_controllers)
-ocp_naive.resetHorizon(args['horizon'])
-
-ocp_zerovel,_ = get_ocp_acados('zerovelSth',model_zerovel)
-ocp_zerovel.set_cost(cost_naive_zerovel)
-ocp_zerovel.build_controller(build = build_controllers)
-ocp_zerovel.resetHorizon(args['horizon'])
-
-params_naive.test_num = params.test_num 
-params_zerovel.test_num = params.test_num 
-
+# params_naive.test_num = params.test_num 
+# params_zerovel.test_num = params.test_num 
 num_ics = params.test_num                       # ics = initial conditions
+
 succ, fails, skip_ics = 0, 0, 0
 sampler = qmc.Halton(model.nq, scramble=False)  # random generator
 
 x_guess_net, u_guess_net = [], []
-x_guess_naive, u_guess_naive = [], []
-x_guess_zerovel, u_guess_zerovel = [], []
+# x_guess_naive, u_guess_naive = [], []
+# x_guess_zerovel, u_guess_zerovel = [], []
 
 # NOTE: Vizualization disabled for faster data generation: NOT WORKING
 # rviz = RobotVisualizer(params, params.nq)
@@ -110,7 +117,7 @@ if not(ocp_with_net.model.params.track_traj): # NOTE: theoretically, it is my ca
         x0[:model.nq] = q0
 
         # rviz.displayWithEESphere(x0[:params.nq],params.robot_capsules+params.obst_capsules,params.spheres_robot)
-        
+
         # if ocp_with_net.model.checkCollision(x0): # if checkCollision(...) == true ---> no collision
         if True:
             print(f'accepted:{x0}')
@@ -137,23 +144,30 @@ if not(ocp_with_net.model.params.track_traj): # NOTE: theoretically, it is my ca
                     print(f'Check network constraint {ocp_with_net.model.checkSafeConstraints(ocp_with_net.x_temp[-1])}')
                     print(f'Value: {ocp_with_net.model.nn_func(ocp_with_net.x_temp[-1], ocp_with_net.params.alpha)}')
 
-                ocp_naive.setGuess(x0_g,u0_g)
-                ocp_zerovel.setGuess(x0_g,u0_g)
-                status_naive = ocp_naive.solve(x0)
-                if ((status_naive == 0 or status_naive == 2 ) and ocp_naive.checkGuess()):
-                    x_guess_naive.append(copy.copy(ocp_naive.x_temp))
-                    u_guess_naive.append(copy.copy(ocp_naive.u_temp))
-                else:
-                    x_guess_naive.append(copy.copy(ocp_with_net.x_temp))
-                    u_guess_naive.append(copy.copy(ocp_with_net.u_temp))
+                #Print xg_net dimensions
+                print(f'xg_net shape: {xg_net.shape}')
+                print(f'ug_net shape: {ug_net.shape}')
 
-                status_zero_vel = ocp_zerovel.solve(x0)
-                if ((status_zero_vel==0 or status_zero_vel==2) and ocp_zerovel.checkGuess()):
-                    x_guess_zerovel.append(copy.copy(ocp_zerovel.x_temp))
-                    u_guess_zerovel.append(copy.copy(ocp_zerovel.u_temp))
-                else:
-                    x_guess_zerovel.append(copy.copy(ocp_with_net.x_temp))
-                    u_guess_zerovel.append(copy.copy(ocp_with_net.u_temp))
+
+                # ocp_naive.setGuess(x0_g,u0_g)
+                # ocp_zerovel.setGuess(x0_g,u0_g)
+                # status_naive = ocp_naive.solve(x0)
+                # if ((status_naive == 0 or status_naive == 2 ) and ocp_naive.checkGuess()):
+                #     x_guess_naive.append(copy.copy(ocp_naive.x_temp))
+                #     u_guess_naive.append(copy.copy(ocp_naive.u_temp))
+                # else:
+                #     x_guess_naive.append(copy.copy(ocp_with_net.x_temp))
+                #     u_guess_naive.append(copy.copy(ocp_with_net.u_temp))
+
+                # status_zero_vel = ocp_zerovel.solve(x0)
+                # if ((status_zero_vel==0 or status_zero_vel==2) and ocp_zerovel.checkGuess()):
+                #     x_guess_zerovel.append(copy.copy(ocp_zerovel.x_temp))
+                #     u_guess_zerovel.append(copy.copy(ocp_zerovel.u_temp))
+                # else:
+                #     x_guess_zerovel.append(copy.copy(ocp_with_net.x_temp))
+                #     u_guess_zerovel.append(copy.copy(ocp_with_net.u_temp))
+
+                # 
 
                 if TEST_NOISE:
                     for ll in range(params.test_num-1):
@@ -244,16 +258,19 @@ print(f'Number of skipped initial conditions: {skip_ics}')
 
 traj__track = 'traj_track' if ocp_with_net.model.params.track_traj else ""
 
-with open(f'{params.DATA_DIR}{model_name}_naiveSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_naive.model.params.use_net}_{traj__track}_q_collision_margins_{params_naive.q_margin}_{params_naive.collision_margin}_guess.pkl', 'wb') as f:
-        pickle.dump({'xg': np.asarray(x_guess_naive), 'ug': np.asarray(u_guess_naive)}, f)
-with open(f'{params.DATA_DIR}{model_name}_zerovelSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_zerovel.model.params.use_net}_{traj__track}_q_collision_margins_{params_zerovel.q_margin}_{params_zerovel.collision_margin}_guess.pkl', 'wb') as f:
-        pickle.dump({'xg': np.asarray(x_guess_zerovel), 'ug': np.asarray(u_guess_zerovel)}, f)
+# with open(f'{params.DATA_DIR}{model_name}_naiveSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_naive.model.params.use_net}_{traj__track}_q_collision_margins_{params_naive.q_margin}_{params_naive.collision_margin}_guess.pkl', 'wb') as f:
+#         pickle.dump({'xg': np.asarray(x_guess_naive), 'ug': np.asarray(u_guess_naive)}, f)
+# with open(f'{params.DATA_DIR}{model_name}_zerovelSth_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_zerovel.model.params.use_net}_{traj__track}_q_collision_margins_{params_zerovel.q_margin}_{params_zerovel.collision_margin}_guess.pkl', 'wb') as f:
+#         pickle.dump({'xg': np.asarray(x_guess_zerovel), 'ug': np.asarray(u_guess_zerovel)}, f)
 
-if (args['controller']!= 'naive' and args['controller']!= 'zerovel'):
-    for cont in controllers_list:
-        if cont in ['st','stwa','htwa','receding','real_receding','receding_parallel','parallel2','constraint_everywhere']:
-            with open(f'{params.DATA_DIR}{model_name}_{cont}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_{params.q_margin}_{params.collision_margin}_guess.pkl', 'wb') as f:
-                pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
+# if (args['controller']!= 'naive' and args['controller']!= 'zerovel'):
+#     for cont in controllers_list:
+#         if cont in ['st','stwa','htwa','receding','real_receding','receding_parallel','parallel2','constraint_everywhere', 'naiveSth']:
+#             with open(f'{params.DATA_DIR}{model_name}_{cont}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_{params.q_margin}_{params.collision_margin}_guess.pkl', 'wb') as f:
+#                 pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
+
+with open(f'{params.DATA_DIR}{model_name}_{args["controller"]}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_0_0_guess.pkl', 'wb') as f:
+    pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
 
 ### TIME METRICS 
 elapsed_time = time.time() - start_time
@@ -261,3 +278,5 @@ hours = int(elapsed_time // 3600)
 minutes = int((elapsed_time % 3600) // 60)
 seconds = int(elapsed_time % 60)
 print(f'Elapsed time: {hours}:{minutes:2d}:{seconds:2d}')
+
+subprocess.run([os.path.join(os.getcwd(), 'venv', 'bin', 'python'), 'extra/plotter.py'])

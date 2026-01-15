@@ -9,8 +9,7 @@ from safe_mpc.cost_definition import *
 import sys
 from rich.traceback import install
 install(show_locals=True)
-
-
+import subprocess
 
 CALLBACK = True # Enable debug prints during simulation
 
@@ -149,7 +148,6 @@ for i in range(0,params.test_num): # x_init.shape[0]):
                    
             ja += 1
             
-
         else:   
             
             u[j], sa_flag = controller.step(x_sim[j])

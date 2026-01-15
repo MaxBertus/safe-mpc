@@ -308,9 +308,9 @@ class NaiveSthController(AbstractController):
         self.ocp.model = self.model.amodel
         self.p = cs.MX.sym("p", 8)     #  p[0:6] -> EE reference (where you want to move the EE), p[6] -> Safety margin for the NN model in percentage ex (10% defined as 10), p[7] -> logic variable: 1 to activate the safe set constraint, -1 to deactivate it
         self.ocp.model.p = self.p
-        self.ee_params = self.p[:6]
-        self.alpha_param = self.p[6]
-        self.cs_if_else_param = self.p[7]
+        self.ee_params = self.p[:model.nq]
+        self.alpha_param = self.p[model.nq]
+        self.cs_if_else_param = self.p[model.nq + 1]
 
         # Cost
         self.cost = None
@@ -364,7 +364,6 @@ class NaiveSthController(AbstractController):
         self.time_fields = ['time_lin', 'time_sim', 'time_qp', 'time_qp_solver_call',
                             'time_glob', 'time_reg', 'time_tot']
         self.last_status = 4    
-
 
     def checkGuess(self):
         # return self.model.checkRunningConstraints(self.x_temp, self.u_temp) and \

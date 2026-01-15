@@ -1,5 +1,5 @@
 test_num: 1             # Number of tests with random initial joint positions and zero velocities
-n_steps: 800              # Number of time steps in each test DOUBT: what is a time step here?
+n_steps: 800              # Number of time steps in each test
 cpu_num: 24
 
 N: 45                     # Horizon length ---> 45 for z1 
@@ -32,11 +32,11 @@ ipopt_opts:               # IPOPT options
   'ipopt.sb': 'yes'
         
 
-Q_weight: 1e6              # State cost
+Q_weight: 1e6             # State cost
   # - [Q_weight, 0., 0.]
-  # - [0., Q_weight00, 0.]
+  # - [0., Q_weight, 0.]
   # - [0., 0., Q_weight]
-R_weight: 1                # Torque cost
+R_weight: 1e-6               # Torque cost
   
 
 tol_x: 5e-3               # State tolerance -4 DOUBT: why -4?

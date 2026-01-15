@@ -91,9 +91,9 @@ class ReachTargetEXT(AbstractCost):
         t_glob = controller.model.t_glob
         delta = t_glob - controller.ee_params    #controller.model.ee_ref
         track_ee = delta.T @ (self.Q * np.eye(controller.model.t_glob.shape[0])) @ delta 
-        controller.ocp.model.cost_expr_ext_cost = track_ee + controller.model.u.T @ (self.R * np.eye(controller.model.nu)) @ controller.model.u
+        controller.ocp.model.cost_expr_ext_cost = track_ee  + controller.model.u.T @ (self.R * np.eye(controller.model.nu)) @ controller.model.u
         controller.ocp.model.cost_expr_ext_cost_e = track_ee
-    
+
     def set_ocp_cost_type(self, controller):
         super().set_ocp_cost_type(controller)
         controller.ocp.solver_options.hessian_approx = "EXACT"

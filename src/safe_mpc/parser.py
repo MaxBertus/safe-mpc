@@ -10,10 +10,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--system', type=str, default='sth',
                         help='Systems to test. Available: pendulum, double_pendulum, ur5, z1, sth')
-    parser.add_argument('-d', '--dofs', type=int, default=4,
-                        help='Number of desired degrees of freedom of the system')
+    # parser.add_argument('-d', '--dofs', type=int, default=4,
+    #                     help='Number of desired degrees of freedom of the system')
     parser.add_argument('-c', '--controller', type=str, default='naiveSth',
-                        help='Controllers to test. Available: naive, st, stwa, htwa, receding')
+                        help='Controllers to test. Available: naive, st, stwa, htwa, receding, naiveSth')
     parser.add_argument('-b', '--build', action='store_true',
                         help='Build the code of the embedded controller')
     parser.add_argument('--alpha', type=float, default=10.0,
@@ -28,8 +28,8 @@ def parse_args():
                         help='Noise in the model dynamics')
     parser.add_argument('--control_noise', type=float, default=0.,
                         help='Additive noise to the control')
-    parser.add_argument('--joint_bounds_margin', type=float, default=0.,
-                        help='Joint bounds margin, in percentage - used in case of noise')
+    # parser.add_argument('--joint_bounds_margin', type=float, default=0.,
+    #                     help='Joint bounds margin, in percentage - used in case of noise')
     parser.add_argument('--collision_margin', type=float, default=0.,
                         help='Collision margin in the constraints [m] - used in case of noise')
     return vars(parser.parse_args())
@@ -60,28 +60,23 @@ def align_vectors(a, b):
 
 class Parameters:
     def __init__(self, args, urdf_name, rti=True, filename=None):
-        self.urdf_name = urdf_name
-        self.robot_name = urdf_name
-        # Define all the useful paths
+
         self.PKG_DIR = os.path.dirname(os.path.abspath(__file__))
         self.ROOT_DIR = self.PKG_DIR.split('/src/safe_mpc')[0]
         self.CONF_DIR = os.path.join(self.ROOT_DIR, 'config/')
         self.DATA_DIR = os.path.join(self.ROOT_DIR, 'data_noise/')
         self.GEN_DIR = os.path.join(self.ROOT_DIR, 'generated/')
+        self.NN_DIR = os.path.join(self.ROOT_DIR, 'nn_models/' + urdf_name + '/')
+        self.ROBOTS_DIR = os.path.join(self.ROOT_DIR, 'robots/')
+
+        self.urdf_name = urdf_name
+        self.robot_name = urdf_name
+        self.robot_urdf = f'{self.ROBOTS_DIR}/{urdf_name}_description/urdf/{urdf_name}.urdf'
+
         if filename is None:
             parameters = yaml.load(open(self.ROOT_DIR + '/config.yaml'), Loader=yaml.FullLoader)
         else:
             parameters = yaml.load(open(filename), Loader=yaml.FullLoader)
-
-        
-        self.NN_DIR = os.path.join(self.ROOT_DIR, 'nn_models/' + urdf_name + '/')
-        self.ROBOTS_DIR = os.path.join(self.ROOT_DIR, 'robots/')
-
-        self.robot_urdf = f'{self.ROBOTS_DIR}/{urdf_name}_description/urdf/{urdf_name}.urdf'
-
-        # self.robot_descr = URDF.from_xml_file(self.robot_urdf)
-        # self.links = [self.robot_descr.links[i].name for i in range(len(self.robot_descr.links))]
-        # self.joints = [self.robot_descr.joints[i] for i in range(len(self.robot_descr.joints))]
         
         self.test_num = int(parameters['test_num'])
         self.n_steps = int(parameters['n_steps'])
@@ -110,7 +105,7 @@ class Parameters:
         self.reg_term_analytic_constr = float(parameters['reg_term'])
 
         self.nq = int(parameters['n_dofs'])
-        self.net_size[0] = self.nq*2
+        self.net_size[0] = self.nq*2    # TO FIX
         self.ee_ref = np.array(parameters['ee_ref'])
         self.ee_pos = np.array(parameters['ee_position'])
 
@@ -134,35 +129,33 @@ class Parameters:
         self.tol_safe_set = float(parameters['tol_safe_set'])
 
         self.Q_weight = float(parameters['Q_weight'])
-        self.R_weight = float(parameters['R_weight'])         # eye(nu) * R
+        self.R_weight = float(parameters['R_weight'])
         self.eps = float(parameters['eps'])
         self.tol_conv = float(parameters['tol_conv'])
         self.tol_cost = float(parameters['tol_cost'])
         self.globalization = 'FIXED_STEP' if rti else 'MERIT_BACKTRACKING'
 
-        self.q_dot_gain = float(parameters['q_dot_gain'])
-        self.ws_t = float(parameters['ws_t'])
-        self.ws_r = float(parameters['ws_r'])
+        self.q_dot_gain = float(parameters['q_dot_gain'])   # ???
+        self.ws_t = float(parameters['ws_t'])               # ???
+        self.ws_r = float(parameters['ws_r'])               # ???
 
-        self.q_margin = float(parameters['joint_bounds_margin'])
-        self.q_margin = args['joint_bounds_margin']
 
-        # For cartesian constraint
-        self.obs_flag = bool(parameters['obs_flag'])
-        self.abort_flag = bool(parameters['abort_flag'])
+        # # For cartesian constraint
+        # self.obs_flag = bool(parameters['obs_flag'])
+        # self.abort_flag = bool(parameters['abort_flag'])
 
-        self.frame_name = parameters['frame_ee']
-        self.ee_radius = float(parameters['ee_radius'])
+        # self.frame_name = parameters['frame_ee']
+        # self.ee_radius = float(parameters['ee_radius'])
 
-        self.obs_string = parameters['obs_string']
+        # self.obs_string = parameters['obs_string']
 
-        self.ddq_max = np.array(parameters['ddq_max'])
-        self.ddx_max = np.array(parameters['ddx_max'])
+        # self.ddq_max = np.array(parameters['ddq_max'])
+        # self.ddx_max = np.array(parameters['ddx_max'])
 
-        self.collision_margin = args['collision_margin']
+        # self.collision_margin = args['collision_margin']
 
-        self.noise = args["noise"]
-        self.control_noise = args["control_noise"]
+        # self.noise = args["noise"]
+        # self.control_noise = args["control_noise"]
 
 
         # collision pairs
@@ -243,8 +236,6 @@ class Parameters:
         self.v_max = np.array(parameters['v_max'])
 
         self.orient_g_rej = bool(parameters['orient_g_rej'])
-
-
 
 
     def create_moving_capsule(self,capsule):

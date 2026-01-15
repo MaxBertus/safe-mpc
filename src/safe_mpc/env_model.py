@@ -330,7 +330,6 @@ class AdamModel:
 class SthModel(AdamModel):
     def __init__(self, params):
         # super().__init__(params)
-
         self.params = params
         
         # System parameters
@@ -363,8 +362,8 @@ class SthModel(AdamModel):
         self.x_dot = MX.sym("x_dot", nq * 2)
         self.u = MX.sym("u", nu)
         self.p = MX.sym("p", nq)
-            
-        self.t_glob = self.x[0:nq]
+
+        self.t_glob = self.x[:nq]
         self.ee_ref = params.ee_ref
 
         # Rotation matrix 
