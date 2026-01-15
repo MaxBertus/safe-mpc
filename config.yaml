@@ -32,11 +32,11 @@ ipopt_opts:               # IPOPT options
   'ipopt.sb': 'yes'
         
 
-Q_weight: 1e6             # State cost
+Q_weight: 1e9             # State cost
   # - [Q_weight, 0., 0.]
   # - [0., Q_weight, 0.]
   # - [0., 0., Q_weight]
-R_weight: 1e-6               # Torque cost
+R_weight: 1               # Torque cost
   
 
 tol_x: 5e-3               # State tolerance -4 DOUBT: why -4?

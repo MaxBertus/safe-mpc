@@ -212,7 +212,7 @@ class Parameters:
         #     for pair in parameters['collision_pairs']:
         #         self.collisions_pairs.append(self.assign_pairs(pair[0],pair[1],self.obstacles,self.robot_capsules+self.obst_capsules,self.spheres_robot))
 
-        # self.track_traj = bool(parameters['track_traj'])
+        self.track_traj = bool(parameters['track_traj'])
 
         # robot parameters
 

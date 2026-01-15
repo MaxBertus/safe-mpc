@@ -9,6 +9,7 @@ from safe_mpc.env_model import AdamModel, SthModel
 from safe_mpc.utils import  get_controller , get_ocp_acados, randomize_model
 from safe_mpc.robot_visualizer import RobotVisualizer
 from safe_mpc.ocp import InverseKinematicsOCP
+from safe_mpc.plotter import plotter
 import copy
 from safe_mpc.cost_definition import *
 import warnings
@@ -16,12 +17,12 @@ from rich.traceback import install
 install(show_locals=True)
 import subprocess
 
-### SETUP & CONFIGURATION
-## Terminal arguments parsing
+### SETUP & CONFIGURATION ###
+## Terminal arguments parsing ##
 args = parse_args()
 model_name = args['system'] 
 
-## Configuration file reading and parameters setup
+## Configuration file reading and parameters setup ##
 params = Parameters(args,model_name, rti=False)
 # params_naive = Parameters(args,model_name, rti=False)
 # params_zerovel = Parameters(args,model_name, rti=False)
@@ -48,12 +49,12 @@ params.noise_cm = args['noise']
 # params_zerovel.q_margin = args['joint_bounds_margin']
 # params_zerovel.collision_margin = args['collision_margin']
  
-## Model and environment setup
+## Model and environment setup ##
 model = SthModel(params)           
 # model_naive = SthModel(params_naive)
 # model_zerovel = SthModel(Parameters(args,model_name, rti=False))
 
-## OCP and controller setup
+## OCP and controller setup ##
 cost = ReachTargetEXT(model,params.Q_weight,params.R_weight)           
 # cost_naive_zerovel = ReachTargetNLS(model,params.Q_weight,params.R_weight) 
 ocp_name = args['controller']
@@ -269,8 +270,10 @@ traj__track = 'traj_track' if ocp_with_net.model.params.track_traj else ""
 #             with open(f'{params.DATA_DIR}{model_name}_{cont}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_{params.q_margin}_{params.collision_margin}_guess.pkl', 'wb') as f:
 #                 pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
 
-with open(f'{params.DATA_DIR}{model_name}_{args["controller"]}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_0_0_guess.pkl', 'wb') as f:
-    pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
+file_name = f'{model_name}_{args["controller"]}_{args["horizon"]}hor_{int(params.alpha)}sm_use_net{ocp_with_net.model.params.use_net}_{traj__track}_q_collision_margins_0_0_guess.pkl'
+
+with open(f'{params.DATA_DIR}{file_name}', 'wb') as f:
+        pickle.dump({'xg': np.asarray(x_guess_net), 'ug': np.asarray(u_guess_net)}, f)
 
 ### TIME METRICS 
 elapsed_time = time.time() - start_time
@@ -279,4 +282,4 @@ minutes = int((elapsed_time % 3600) // 60)
 seconds = int(elapsed_time % 60)
 print(f'Elapsed time: {hours}:{minutes:2d}:{seconds:2d}')
 
-subprocess.run([os.path.join(os.getcwd(), 'venv', 'bin', 'python'), 'extra/plotter.py'])
+plotter(file_path=os.path.join(params.DATA_DIR, file_name), animate=False)

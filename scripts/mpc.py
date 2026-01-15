@@ -1,6 +1,8 @@
+import os
 import pickle
 import numpy as np
 from functools import reduce
+from safe_mpc.plotter import plotter
 from safe_mpc.parser import Parameters, parse_args
 from safe_mpc.env_model import AdamModel, SthModel
 from safe_mpc.utils import get_controller, randomize_model
@@ -16,6 +18,8 @@ CALLBACK = True # Enable debug prints during simulation
 ### SETUP AND CONFIGURATION ###
 args = parse_args()
 model_name = args['system']
+
+## Configuration file reading and parameters setup ## 
 params = Parameters(args,model_name, rti=True)
 # params.q_margin = args['joint_bounds_margin']
 # params.collision_margin = args['collision_margin']
@@ -26,21 +30,18 @@ params.alpha = args['alpha']
 params.backhor = args['back_hor']
 horizon = args['horizon']
 params.N=horizon
+params.noise_mass = args['noise']
+params.noise_inertia = args['noise']
+params.noise_cm = args['noise']
+params.control_noise = args['control_noise']
+
+
+## Model and environment setup ##
 model = SthModel(params)
 
-model.ee_ref = params.ee_ref
-nq = model.nq
-
-# print(f'\n q_min: {model.x_min}, q_max: {model.x_max} \n')
-
-# params.noise_mass = args['noise']
-# params.noise_inertia = args['noise']
-# params.noise_cm = args['noise']
-# params.control_noise = args['control_noise']
-build_controllers=args['build']
-
-### DEFINITION OF CONTROLLER AND SAFE ABORT CONTROLLER ###
+## MPC and safe abort controller set up ###
 cont_name = args['controller']
+build_controllers=args['build']
 controller = get_controller(cont_name, model)
 # cost_controller = TrackingMovingCircleNLS(model,params.Q_weight,params.R_weight)
 # cost_controller = Tracking8NLS(model,params.Q_weight,params.R_weight)
@@ -48,11 +49,10 @@ controller = get_controller(cont_name, model)
 #     cost_controller = ReachTargetNLS(model,params.Q_weight,params.R_weight)
 #     print('Cost NLS')
 # else:    
-print('Cost EXT')
 cost_controller = ReachTargetEXT(model,params.Q_weight, params.R_weight)
-
 cost_controller.set_solver_cost(controller)
 controller.build_controller(build_controllers)
+controller.resetHorizon(horizon)
 
 param_backup = Parameters(args,model_name, rti=True)
 # param_backup.q_margin = args['joint_bounds_margin']
@@ -69,18 +69,16 @@ cost_controller_backup.set_solver_cost(safe_ocp)
 #     build_safe_ocp = True
 # else:
 #     build_safe_ocp = False
-
 safe_ocp.build_controller(build=args['build'], name=args['controller'])
-
-controller.resetHorizon(horizon)
 safe_ocp.resetHorizon(params.back_hor)
 
 traj__track = 'traj_track' if controller.model.params.track_traj else "" 
 
-joint_margin=args["joint_bounds_margin"]
-collision_margin=args["collision_margin"]
-data = pickle.load(open(f'{params.DATA_DIR}{model_name}_{cont_name}_{horizon}hor_{int(params.alpha)}sm_use_net{controller.model.params.use_net}_{traj__track}_q_collision_margins_{controller.model.params.q_margin}_{controller.model.params.collision_margin}_guess.pkl', 'rb'))
-print(f'{params.DATA_DIR}{model_name}_{cont_name}_{horizon}hor_{int(params.alpha)}sm_use_net{controller.model.params.use_net}_{traj__track}_q_collision_margins_{controller.model.params.q_margin}_{controller.model.params.collision_margin}_guess.pkl')
+# joint_margin=args["joint_bounds_margin"]
+# collision_margin=args["collision_margin"]
+
+data = pickle.load(open(f'{params.DATA_DIR}{model_name}_{cont_name}_{horizon}hor_{int(params.alpha)}sm_use_net{controller.model.params.use_net}_{traj__track}_q_collision_margins_0_0_guess.pkl', 'rb'))
+print(f'Loaded: {params.DATA_DIR}{model_name}_{cont_name}_{horizon}hor_{int(params.alpha)}sm_use_net{controller.model.params.use_net}_{traj__track}_q_collision_margins_0_0_guess.pkl')
 
 x_guess = data['xg']
 u_guess = data['ug']
@@ -126,6 +124,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
     ja = 0
     sa_flag = False
     for j in range(params.n_steps):
+        sa_flag = False ### DEBUG ###
         model.reset_seed(i)
         model_backup.reset_seed(i)
         # if controller.track_traj:
@@ -134,17 +133,17 @@ for i in range(0,params.test_num): # x_init.shape[0]):
             # Follow safe abort trajectory (PD to stabilize at the end)
             if ja < safe_ocp.N:
                 u[j] = u_abort[ja]
-                u[j] -= kp*(x_sim[j][:nq] - x_abort[ja][:nq]) + kd*(x_sim[j][nq:] - x_abort[ja][nq:]) 
+                u[j] -= kp*(x_sim[j][:model.nq] - x_abort[ja][:model.nq]) + kd*(x_sim[j][model.nq:] - x_abort[ja][model.nq:]) 
 
             elif ja >= safe_ocp.N:
                 print('Check safe abort')
-                if (x_sim[j][nq:] < 5e-3).all():
+                if (x_sim[j][model.nq:] < 5e-3).all():
                     print('successful, return to MPC')
                     sa_flag = False
                     u[j], sa_flag = controller.step(x_sim[j])
                 else:
-                    print(f'not successful final vel {x_sim[j][nq:]}, keep stabilizing with PD controller')
-                    u[j] = -(kp*(x_sim[j][:nq] - x_abort[-1][:nq]) + 3e2*(x_sim[j][nq:] - x_abort[-1][nq:]))
+                    print(f'not successful final vel {x_sim[j][model.nq:]}, keep stabilizing with PD controller')
+                    u[j] = -(kp*(x_sim[j][:model.nq] - x_abort[-1][:model.nq]) + 3e2*(x_sim[j][model.nq:] - x_abort[-1][model.nq:]))
                    
             ja += 1
             
@@ -245,7 +244,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
         #                     if viol + params.tol_obs < 0:
         #                         print(f'\t\tCollision {k} with ball: {viol}')
 
-        if cont_name not in ['naive', 'naiveSth', 'zerovel', 'zerovelSth', 'trivial']:
+        if cont_name not in ['naive','naiveSth', 'zerovel', 'zerovelSth', 'trivial']:
             r = controller.r if (cont_name == 'receding' or cont_name == 'parallel') else -1
             if not controller.checkSafeConstraints(controller.x_temp[r]):
                 counters[3] += 1
@@ -286,7 +285,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
             if CALLBACK:
                 print('not converged')
 
-    # if np.linalg.norm(model.jointToEE(x_sim[-1]).T - model.ee_ref) < params.tol_conv:
+    # if np.linalg.norm(model.jointToEE(x_sim[-1]).T - params.ee_ref) < params.tol_conv:
     #     conv_idx.append(i)
     #     if CALLBACK:
     #         print('  SUCCESS !!')
@@ -295,7 +294,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
 
     print()
 
-    if np.linalg.norm((x_sim[-1,:6]).T - model.ee_ref) < params.tol_conv:
+    if np.linalg.norm((x_sim[-1,:6]).T - params.ee_ref) < params.tol_conv:
         conv_idx.append(i)
         if CALLBACK:
             print('  SUCCESS !!')
@@ -331,9 +330,11 @@ for field, t in zip(controller.time_fields, np.quantile(times, 0.99, axis=0)):
     
 # Save simulation data
  
-with open(f'{params.DATA_DIR}{model_name}_{cont_name}_use_net{controller.model.params.use_net}_{horizon}hor_{int(params.alpha)}sm_{traj__track}noise_{args["noise"]}_control_noise{args["control_noise"]}_q_collision_margins_{args["joint_bounds_margin"]}_{args["collision_margin"]}_mpc.pkl', 'wb') as f:
-    pickle.dump({'x': np.asarray(x_sim_list),
-                 'u': np.asarray(u_list),
+file_name = f'{model_name}_{cont_name}_use_net{controller.model.params.use_net}_{horizon}hor_{int(params.alpha)}sm_{traj__track}noise_{args["noise"]}_control_noise{args["control_noise"]}_q_collision_margins_0_0_mpc.pkl'
+
+with open(f'{params.DATA_DIR}{file_name}', 'wb') as f:
+    pickle.dump({'xg': np.asarray(x_sim_list),
+                 'ug': np.asarray(u_list),
                  'r': np.asarray(r_list),
                  'conv_idx' : conv_idx,
                  'collisions_idx' : collisions_idx,
@@ -341,4 +342,6 @@ with open(f'{params.DATA_DIR}{model_name}_{cont_name}_use_net{controller.model.p
                  'viable_idx': viable_idx, 
                  'x_viable': np.asarray(x_viable)}, f)
     
+plotter(file_path=os.path.join(params.DATA_DIR, file_name), animate=False)
+
 sys.exit(len(collisions_idx))
