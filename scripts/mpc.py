@@ -35,7 +35,6 @@ params.noise_inertia = args['noise']
 params.noise_cm = args['noise']
 params.control_noise = args['control_noise']
 
-
 ## Model and environment setup ##
 model = SthModel(params)
 
@@ -159,6 +158,7 @@ for i in range(0,params.test_num): # x_init.shape[0]):
             # print(f'Control at, problem {i} step {j} = {u[j]}')
     
             # Check Safe Abort
+            sa_flag = False
             if sa_flag:
                 x_viable += [controller.getLastViableState()]
                 if CALLBACK:

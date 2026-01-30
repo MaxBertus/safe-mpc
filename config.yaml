@@ -1,9 +1,9 @@
 test_num: 1             # Number of tests with random initial joint positions and zero velocities
-n_steps: 800              # Number of time steps in each test
+n_steps: 400              # Number of time steps in each test
 cpu_num: 24
 
-N: 45                     # Horizon length ---> 45 for z1 
-back_hor: 45              # Horizon for the backup controller
+N: 50                     # Horizon length ---> 45 for z1 
+back_hor: 50              # Horizon for the backup controller
 dt: 5e-3                  # Time step
 alpha: 10.                # Safety margin [I suppose for viability kernel] 
 
@@ -14,11 +14,11 @@ cost_type: 'NLS'          # NLS (non-linear least squares) or EXT (external)
 
 solver_mode: 'BALANCE'    # HPIPM mode, can be ---> 'BALANCE', 'ROBUST', 'SPEED', 'SPEED_ABS'
 nlp_max_iter: 1000        # Maximum number of iterations for the NLP solver
-rti_iter: 1               # Number of RTI iterations DOUBT: what is rti?
+rti_iter: 5               # Number of RTI iterations DOUBT: what is rti?
 qp_max_iter: 200          # Maximum number of iterations for the QP solver
 alpha_reduction: 0.3      # Reduction factor for alpha
 alpha_min: 1e-2           # Minimum value for alpha
-levenberg_marquardt: 5e-1 # Levenberg-Marquardt regularization factor: 1e-3 in general, 1e-1 for z1 guess, 1e0 for z1 mpc
+levenberg_marquardt: 1e-3 # Levenberg-Marquardt regularization factor: 1e-3 in general, 1e-1 for z1 guess, 1e0 for z1 mpc
 ext_flag: '-O2'           # Flag for external solver compilation DOUBT: what is external solver?
 
 ipopt_opts:               # IPOPT options
@@ -31,12 +31,11 @@ ipopt_opts:               # IPOPT options
   'ipopt.max_iter': 500
   'ipopt.sb': 'yes'
         
-
-Q_weight: 1e9             # State cost
+Q_weight: 1e8             # State cost
   # - [Q_weight, 0., 0.]
   # - [0., Q_weight, 0.]
   # - [0., 0., Q_weight]
-R_weight: 1               # Torque cost
+R_weight: 1e-2               # Torque cost
   
 
 tol_x: 5e-3               # State tolerance -4 DOUBT: why -4?
@@ -56,7 +55,7 @@ ws_r: 1e4                # Weight for regularization DOUBT: where is this used?
 obs_flag: true           # Activation of Cartesian constraints
 obs_string: '_obs'       # Suffix for obstacle avoidance scenarios
 abort_flag: true         # Activation of abort mechanism for receding MPC
-use_net: true            # Use the network safe set if true, otherwise analytic safe set DOUBT: what is analytic safe set?
+use_net: false            # Use the network safe set if true, otherwise analytic safe set DOUBT: what is analytic safe set?
 
 # network_path: 'nn_models/z1/4dof_gelu_dt_5_line_trackingms.pt'   # Path to network file
 #network_path: '../nn_models/z1/4dof_gelu_obs_track_line.pt'

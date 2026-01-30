@@ -354,14 +354,14 @@ class SthModel(AdamModel):
 
         nq = 6 # dimension of pose: 3 for position, 3 for orientation (Euler Angles) 
         nu = 6 # dimension of input: 6 squared spinning rates
-        npos = 3 # dimension of positon
+        npos = 3 # dimension of position
         nori = 3 # dimension of orientation
         nbox = 6 # dimension of box parameters
 
         self.x = MX.sym("x", nq * 2)
         self.x_dot = MX.sym("x_dot", nq * 2)
         self.u = MX.sym("u", nu)
-        self.p = MX.sym("p", nq)
+        #self.p = MX.sym("p", nq)
 
         self.t_glob = self.x[:nq]
         self.ee_ref = params.ee_ref
@@ -467,7 +467,7 @@ class SthModel(AdamModel):
         self.amodel.x = self.x
         self.amodel.u = self.u
         self.amodel.f_expl_expr = self.f_expl
-        self.amodel.p = self.p
+        #self.amodel.p = self.p
         
         self.nx = self.amodel.x.size()[0]
         self.nu = self.amodel.u.size()[0]

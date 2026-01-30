@@ -18,7 +18,7 @@ def parse_args():
                         help='Build the code of the embedded controller')
     parser.add_argument('--alpha', type=float, default=10.0,
                         help='Alpha parameter for the NN safety factor')
-    parser.add_argument('--horizon', type=int, default=45,
+    parser.add_argument('--horizon', type=int, default=150,
                         help='Horizon of the optimal control problem')
     parser.add_argument('-a', '--activation', type=str, default='gelu',
                         help='Activation function for the neural network')

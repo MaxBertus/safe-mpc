@@ -7,12 +7,13 @@ import safe_mpc.animator
 from rich.traceback import install
 install(show_locals=True)
 
-def plotter(file_path=None, animate=False):
+def plotter(file_path=None, animate=False, Duration=10.0, dt=0.005):
     ### USER PARAMETERS ###
     if file_path is None:
         file_path = "./data_noise/sth_naiveSth_45hor_10sm_use_netNone__q_collision_margins_0_0_guess.pkl"  
-    Ts = 5e-3                               # control sampling time [s]
+
     u_max = 108**2                          # actuator saturation (if known)
+    u_max = u_max * 1.1                     # for plotting limits
 
     # Optional reference (set to None if unavailable)
     yref = None                          # shape (N+1, nx) or None
@@ -27,12 +28,17 @@ def plotter(file_path=None, animate=False):
     print(f"Loaded data from {file_path}")
     print(f"xHistory shape: {xHistory.shape}")
 
-    N = xHistory.shape[1] - 1
+    if xHistory.ndim == 3:
+        N = xHistory.shape[1] - 1
+        xHistory = xHistory[-1, :, :]   # (N+1, 12)
+        uHistory = uHistory[-1, :, :]   # (N, 6)
+    else:
+        N = xHistory.shape[0] - 1
+        xHistory = xHistory[:N, :]   # (N, 12)
+        uHistory = uHistory[:, :]   # (N, 6)
 
-    xHistory = xHistory[-1, :N, :]   # (N, 12)
-    uHistory = uHistory[-1, :, :]   # (N, 6)
-
-    time = np.arange(0, N * Ts, Ts)
+    # time = np.arange(0, N * Ts, Ts)
+    time = np.arange(0, Duration, dt)
 
     # Helper
     rad2deg = lambda x: x * 180.0 / np.pi
