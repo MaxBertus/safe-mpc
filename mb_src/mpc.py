@@ -26,27 +26,32 @@ class Params:
         self.robot_name = "aSTedH"
 
         # *** MPC PARAMETERS ***
-        self.Q = 1e2
-        self.R = 1
-        self.N = 50
+        self.nx = 12
+        self.nu = 6
+        self.Q = np.diag([1e2, 1e2, 1e2,    # position
+                           1e2, 1e2, 1e2,   # orientation
+                           1e1, 1e1, 1e1,   # linear velocities 
+                           5e1, 5e1, 5e1])  # angular velocities
+        self.R = 1e0 * np.eye(self.nu)
+        self.N = 30
 
         # *** SIMULATION PARAMETERS ***
-        self.SimDuration = 10.0
-        self.dt = 0.01
-        self.dtSim = 0.01
+        self.SimDuration = 5.0
+        self.dt = 0.05
+        self.dtSim = 0.001
+        self.nsub = int( self.dt / self.dtSim )
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         self.obstacles = [
-            {"center": np.array([0.0, 0.0, 0.5]), "radius": 0.05},
+            {"center": np.array([0.0, 0.0, 0.5]), "radius": 0.1},
             # {"center": np.array([0.5, 0.5, 1.2]), "radius": 0.25},            
         ]
-
-        self.state_constraint_active = True
-        self.use_explicit_euler = True
-        self.zlim = 1.05
+        self.state_constraint_active = False
+        self.zlim = 4.0
 
 # =========================================================
 # MODEL GENERATION
@@ -56,9 +61,8 @@ class SthModel:
     def __init__(self, params):
         self.r = params.cf / params.ct * params.l
 
-        self.nx = 12
-        self.nx_half = 6
-        self.nu = 6
+        self.nx = params.nx
+        self.nu = params.nu
 
         x = MX.sym("x", self.nx)
         u = MX.sym("u", self.nu)
@@ -211,9 +215,9 @@ def create_acados_sim(model, params):
 
 def run_mpc(model, params):
 
-    nx, nx_half, nu = model.nx, model.nx_half, model.nu
-    ny = nx_half + nu
-    ny_e = nx_half
+    nx, nu = model.nx, model.nu
+    ny = nx + nu
+    ny_e = nx
     time = np.arange(0, params.SimDuration, params.dt)
 
     ocp = AcadosOcp()
@@ -225,27 +229,31 @@ def run_mpc(model, params):
     ocp.cost.cost_type_e = "LINEAR_LS"
 
     Vx = np.zeros((ny, nx))
-    Vx[:nx_half, :nx_half] = np.eye(nx_half)
+    Vx[:nx, :nx] = np.eye(nx)
 
     Vu = np.zeros((ny, nu))
-    Vu[nx_half:, :] = np.eye(nu)
+    Vu[nx:, :] = np.eye(nu)
 
-    Vx_e = np.zeros((ny_e, nx))
-    Vx_e[:, :nx_half] = np.eye(nx_half)
+    Vx_e = np.eye((nx))
 
     ocp.cost.Vx = Vx
     ocp.cost.Vu = Vu
     ocp.cost.Vx_e = Vx_e
 
-    Q = params.Q* np.eye(nx_half)
-    R = params.R * np.eye(nu)
+    Q = params.Q
+    R = params.R
 
-    ocp.cost.W = np.block([[Q, np.zeros((nx_half, nu))],
-                            [np.zeros((nu, nx_half)), R]])
+    ocp.cost.W = np.block([[Q, np.zeros((nx, nu))],
+                            [np.zeros((nu, nx)), R]])
     ocp.cost.W_e = Q
 
     x_ref = params.x_ref
-    ocp.cost.yref = np.hstack((x_ref, np.zeros(nu)))
+    if params.use_u_ref_hovering:
+        u_ref = np.linalg.pinv(model.R(x_ref).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+    else:
+        u_ref = np.zeros(nu)
+
+    ocp.cost.yref = np.hstack((x_ref, u_ref))
     ocp.cost.yref_e = x_ref
 
     ocp.constraints.constr_type = "BGH"
@@ -279,7 +287,6 @@ def run_mpc(model, params):
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP" 
-    # ocp.solver_options.qp_solver_warm_start = 1
 
     ocp.solver_options.nlp_solver_max_iter = 200
 
@@ -291,7 +298,7 @@ def run_mpc(model, params):
     ug = []
 
     x_prev = x
-    u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+    u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
     
     initialize_guess(
         solver,
@@ -310,42 +317,22 @@ def run_mpc(model, params):
         solver.solve()
         status = solver.get_status()
 
-        # for k in range(0, params.N+1):
-        #     print(f"{ist*params.dt:.3f}: z at node {k} {solver.get(k, 'x')[2]}")
+        x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
+        u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
 
-        # print("----")
+        x_guess = np.vstack([x_sol[1:], x_sol[-1]]) 
+        u_guess = np.vstack([u_sol[1:], u_sol[-1]])  
 
-        # # *** DEBUGGING INFO ***
-        # print(f"Solver status: {status}")
+        initialize_guess(solver, model, params, x, u_guess=u_guess, x_guess=x_guess)
 
-        # if status == 0:
-        #     # Verifica se i vincoli sono attivi
-        #     print(f"Solver status - again: {status}")
-        #     for k in range(params.N):
-        #         x_k = solver.get(k, "x")
-        #         p_k = x_k[0:3]
-                
-        #         for i, obs in enumerate(params.obstacles):
-        #             dist = np.linalg.norm(p_k - obs["center"])
-        #             constraint_value = dist**2
-        #             print(f"Step {k}, Obs {i}: dist={dist:.4f}, h={constraint_value:.4f}, h_min={obs['radius']**2:.4f}, violated={constraint_value < obs['radius']**2}")
-
-        #     # Verifica i moltiplicatori di Lagrange
-        #     # Se sono zero, i vincoli non sono attivi
-        #     residuals = solver.get_residuals()
-        #     print(f"Residuals: {residuals}")
-        #     # *** FINE DEBUGGING INFO ***
-
-        u_prev = np.array([solver.get(k, "u") for k in range(params.N)])
-        x_prev = np.array([solver.get(k, "x") for k in range(params.N + 1)])
-
-        u = u_prev[0]
+        u = u_sol[0]
         ug.append(u)
 
-        sim_solver.set("x", x)
-        sim_solver.set("u", u)
-        status_sim = sim_solver.solve()
-        x = sim_solver.get("x")
+        for _ in range(params.nsub):
+            sim_solver.set("x", x)
+            sim_solver.set("u", u)
+            status_sim = sim_solver.solve()
+            x = sim_solver.get("x")
 
         xg.append(x.copy())
 

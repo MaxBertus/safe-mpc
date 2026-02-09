@@ -39,7 +39,11 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     time = np.arange(0, params.SimDuration, params.dt)
 
-    yref = params.x_ref.reshape(1, -1).repeat(xHistory.shape[0], axis=0)
+    xref = params.x_ref
+    if params.use_u_ref_hovering:
+        uref = np.linalg.pinv(model.R(params.x_ref).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+    else:
+        uref = np.zeros(params.nu)
 
     # Helper
     rad2deg = lambda x: x * 180.0 / np.pi
@@ -58,10 +62,10 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     for i, ax in enumerate(axs.flat):
         if i < 3:
-            ax.plot(time, yref[:, i], '--', color='r')
+            ax.axhline(y=xref[i], color='r', linestyle='--')
             ax.plot(time, xHistory[:, i], color='b')
         else:
-            ax.plot(time, rad2deg(yref[:, i]), '--', color='r')
+            ax.axhline(y=rad2deg(xref[i]), color='r', linestyle='--')
             ax.plot(time, rad2deg(xHistory[:, i]), color='b')
             
 
@@ -97,7 +101,8 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     fig.suptitle("Control Inputs (ω²)")
 
     for i, ax in enumerate(axs.flat):
-        ax.axhline(y=params.u_bar, color='r', linestyle='--', linewidth=0.8)
+        ax.axhline(y=params.u_bar, color='g', linestyle='-.')
+        ax.axhline(y= params.u_bar * uref[i], color='r', linestyle='--', label="reference")
         ax.step(time, params.u_bar * uHistory[:, i], color='b', where="post", label="actual")
         ax.set_ylim([0, params.u_bar*1.1])
         ax.set_title(f"Input {i+1}")
