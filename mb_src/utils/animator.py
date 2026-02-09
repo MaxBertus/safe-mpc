@@ -2,7 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
-# -------------------- Rotation Matrix --------------------
+# =========================================================
+# Rotation Matrix
+# =========================================================
 
 def rotation_matrix(roll, pitch, yaw):
     """Compute rotation matrix R = Rz * Ry * Rx."""
@@ -22,33 +24,9 @@ def rotation_matrix(roll, pitch, yaw):
 
     return Rz @ Ry @ Rx
 
-
-# -------------------- Synthetic Trajectory --------------------
-
-def synthetic_trajectory(num_steps):
-    """Generate a smooth helical trajectory + oscillatory attitude."""
-    t = np.linspace(0, 4*np.pi, num_steps)
-
-    # Helical 3D trajectory
-    pos = np.vstack([
-        0.5 + 0.3*np.cos(t),
-        0.5 + 0.3*np.sin(t),
-        0.2 + 0.1*t/(4*np.pi)
-    ]).T
-
-    # Smooth roll/pitch oscillations and yaw ramp
-    # roll  = 0.2*np.sin(t)
-    # pitch = 0.2*np.cos(t)
-    # yaw   = t * 0.3
-    
-    roll = np.zeros(t.shape)
-    pitch = np.zeros(t.shape)
-    yaw = t 
-
-    angles = np.vstack([roll, pitch, yaw]).T
-    return pos, angles
-
-# -------------------- Update Function --------------------
+# =========================================================
+# Update Function
+# =========================================================
 
 def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
            arm1, arm2, arm3, arm4, arm5, arm6,
@@ -134,9 +112,9 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
             disc1, disc2, disc3, disc4, disc5, disc6,
             trail_line, time_text)
 
-# ------------------------------------------------------------
-# ------------------------------- Main ------------------------
-# ------------------------------------------------------------
+# =========================================================
+# Main
+# =========================================================
 
 def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
 
@@ -152,6 +130,8 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
+
+    ax.set_box_aspect([1, 1, 1])
 
     # Drone axes
     axx, = ax.plot([], [], [], color="red", linewidth=2)

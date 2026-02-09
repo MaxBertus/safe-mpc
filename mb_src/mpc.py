@@ -37,7 +37,7 @@ class Params:
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0
-        self.dt = 0.05
+        self.dt = 0.01
         self.dtSim = 0.001
         self.nsub = int( self.dt / self.dtSim )
 
@@ -47,7 +47,7 @@ class Params:
 
         # *** ENVIRONMENT PARAMETERS ***
         self.obstacles = [
-            {"center": np.array([0.0, 0.0, 0.5]), "radius": 0.1},
+            {"center": np.array([0.0, 0.0, 0.5]), "radius": 0.2},
             # {"center": np.array([0.5, 0.5, 1.2]), "radius": 0.25},            
         ]
         self.state_constraint_active = False
