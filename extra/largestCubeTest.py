@@ -8,12 +8,12 @@ from plot_cube import plot_cube
 
 if __name__ == "__main__":
 
-    for r in range(1, 2):
+    for r in range(2, 3):
 
         np.random.seed(r)
 
         # Generate random spheres
-        N = 4
+        N = 8
         P = np.random.rand(N, 3)
         R = np.random.uniform(0.1, 0.2, size=(N,))
 

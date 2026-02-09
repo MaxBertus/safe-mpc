@@ -108,6 +108,8 @@ def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, Q, R, plotter=None):
     ax.set_ylim([-1, 1])
     ax.set_zlim([-1, 1])
 
+    ax.set_box_aspect([1, 1, 1])
+
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')

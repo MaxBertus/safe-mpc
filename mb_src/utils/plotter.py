@@ -1,11 +1,11 @@
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-import safe_mpc.animator
+from utils.animator import animator
 from rich.traceback import install
 install(show_locals=True)
 
-def plotter(file_path=None, model=None, params=None, animate=False, Duration=10.0, dt=0.005):
+def plotter(file_path=None, model=None, params=None, animate=False):
     
     # =========================================================
     # CHECK INPUTS
@@ -37,7 +37,7 @@ def plotter(file_path=None, model=None, params=None, animate=False, Duration=10.
         xHistory = xHistory[:N, :]      # (N, 12)
         uHistory = uHistory[:, :]       # (N, 6)
 
-    time = np.arange(0, Duration, dt)
+    time = np.arange(0, params.SimDuration, params.dt)
 
     yref = params.x_ref.reshape(1, -1).repeat(xHistory.shape[0], axis=0)
 
@@ -130,13 +130,14 @@ def plotter(file_path=None, model=None, params=None, animate=False, Duration=10.
         axs[1, i].grid(True)
         axs[1, i].legend(["actual"])
 
+    ## SHOW ALL FIGURES ###
+    plt.show()
+
     # =========================================================
     # ANIMATION
     # =========================================================
-    # pos = xHistory[:, 0:3]        # (N, 3)
-    # angles = xHistory[:, 3:6]     # (N, 3)
+    pos = xHistory[:, 0:3]        # (N, 3)
+    angles = xHistory[:, 3:6]     # (N, 3)
 
-    # animator.animator(pos, angles, dt=Ts, num_steps=N)
+    animator(pos, angles, obstacles=params.obstacles, dt=params.dt, num_steps=N)
 
-    ### SHOW ALL FIGURES ###
-    plt.show()
