@@ -98,7 +98,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     for i, ax in enumerate(axs.flat):
         ax.axhline(y=params.u_bar, color='r', linestyle='--', linewidth=0.8)
-        ax.step(time, uHistory[:, i], color='b', where="post", label="actual")
+        ax.step(time, params.u_bar * uHistory[:, i], color='b', where="post", label="actual")
         ax.set_ylim([0, params.u_bar*1.1])
         ax.set_title(f"Input {i+1}")
         ax.set_ylabel("ω² [rad²/s²]")

@@ -1,7 +1,7 @@
 import numpy as np
 import casadi as ca
 from casadi import MX, vertcat, horzcat, sin, cos, tan, cross
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 from utils.plotter import plotter
 import os
 import pickle
@@ -26,13 +26,14 @@ class Params:
         self.robot_name = "aSTedH"
 
         # *** MPC PARAMETERS ***
-        self.Q = 5e6
-        self.R = 1e-2
+        self.Q = 1e2
+        self.R = 1
         self.N = 50
 
         # *** SIMULATION PARAMETERS ***
-        self.SimDuration = 5.0
+        self.SimDuration = 10.0
         self.dt = 0.01
+        self.dtSim = 0.01
 
         # *** REFERENCE STATE ***
         self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
@@ -44,8 +45,8 @@ class Params:
         ]
 
         self.state_constraint_active = True
-        self.use_explicit_euler = False
-        self.zlim = 2.0
+        self.use_explicit_euler = True
+        self.zlim = 1.05
 
 # =========================================================
 # MODEL GENERATION
@@ -93,13 +94,13 @@ class SthModel:
         cos_a = np.cos(params.alpha_tilt)
         tan_a = np.tan(params.alpha_tilt)
 
-        self.F = params.cf * np.array([
+        self.F = params.u_bar * params.cf * np.array([
         [0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a, 0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a],
         [sin_a, -1/2 * sin_a, -1/2 * sin_a, sin_a, -1/2 * sin_a, -1/2 * sin_a],
         [cos_a, cos_a, cos_a, cos_a, cos_a, cos_a]
         ])
 
-        self.M = params.ct * np.array([
+        self.M = params.u_bar * params.ct * np.array([
             [0, np.sqrt(3)/2 * self.r * cos_a - np.sqrt(3)/2 * sin_a, np.sqrt(3)/2 * self.r * cos_a - np.sqrt(3)/2 * sin_a, 0, -np.sqrt(3)/2 * self.r * cos_a + np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * self.r * cos_a + np.sqrt(3)/2 * sin_a],
             [-self.r * cos_a + sin_a, -1/2 * self.r * cos_a + 1/2 * sin_a, 1/2 * self.r * cos_a - 1/2 * sin_a, self.r * cos_a - sin_a, 1/2 * self.r * cos_a - 1/2 * sin_a, -1/2 * self.r * cos_a + 1/2 * sin_a],
             [self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a]
@@ -150,7 +151,7 @@ class SthModel:
         self.amodel = model
 
         self.u_min = np.zeros(self.nu)
-        self.u_max = params.u_bar * np.ones(self.nu)
+        self.u_max = np.ones(self.nu)
 
 # =========================================================
 # INITIAL GUESS
@@ -197,6 +198,17 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
 # MPC + SIMULATION
 # =========================================================
 
+def create_acados_sim(model, params):
+    sim = AcadosSim()
+    sim.model = model.amodel
+
+    sim.dims.nx = model.nx
+    sim.dims.nu = model.nu
+
+    sim.solver_options.T = params.dtSim
+
+    return AcadosSimSolver(sim, json_file="acados_sim.json")
+
 def run_mpc(model, params):
 
     nx, nx_half, nu = model.nx, model.nx_half, model.nu
@@ -241,10 +253,6 @@ def run_mpc(model, params):
     ocp.constraints.ubu = model.u_max
     ocp.constraints.idxbu = np.arange(nu)
     ocp.constraints.x0 = np.zeros(nx)  
-
-    ocp.model.con_h_expr_0 = model.h_expr
-    ocp.constraints.lh_0 = model.h_min
-    ocp.constraints.uh_0 = model.h_max
     
     if params.state_constraint_active:
         ocp.constraints.ubx = np.array([params.zlim])  
@@ -269,47 +277,43 @@ def run_mpc(model, params):
 
     ocp.solver_options.integrator_type = "ERK"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-    ocp.solver_options.qp_solver = "FULL_CONDENSING_HPIPM"
+    ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP" 
-    ocp.solver_options.qp_solver_warm_start = 1
+    # ocp.solver_options.qp_solver_warm_start = 1
 
     ocp.solver_options.nlp_solver_max_iter = 200
 
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
+    sim_solver = create_acados_sim(model, params)
 
     x = np.zeros(nx)
     xg = [x.copy()]
     ug = []
 
-    u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
     x_prev = x
+    u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+    
+    initialize_guess(
+        solver,
+        model,
+        params,
+        x,
+        u_guess=u_prev,
+        x_guess=x_prev
+    )
 
-    for ist in tqdm(range(time.shape[0]), desc="MPC Simulation Progress"):
-    # for _ in range(1,2):    
-
-        initialize_guess(
-            solver,
-            model,
-            params,
-            x,
-            u_guess=u_prev,
-            x_guess=x_prev
-        )
-
+    for ist in tqdm(range(time.shape[0]), desc="MPC Simulation Progress"): 
 
         solver.set(0, "lbx", x)
         solver.set(0, "ubx", x)
 
-        # solver.set(0, "x", x)
-
         solver.solve()
+        status = solver.get_status()
 
         # for k in range(0, params.N+1):
         #     print(f"{ist*params.dt:.3f}: z at node {k} {solver.get(k, 'x')[2]}")
 
         # print("----")
-
-        status = solver.get_status()
 
         # # *** DEBUGGING INFO ***
         # print(f"Solver status: {status}")
@@ -338,11 +342,11 @@ def run_mpc(model, params):
         u = u_prev[0]
         ug.append(u)
 
-        if params.use_explicit_euler:
-            xdot = model.f_expl_func(x, u).full().squeeze()
-            x = x + params.dt * xdot
-        else:
-            x = solver.get(1, "x")
+        sim_solver.set("x", x)
+        sim_solver.set("u", u)
+        status_sim = sim_solver.solve()
+        x = sim_solver.get("x")
+
         xg.append(x.copy())
 
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
