@@ -31,7 +31,7 @@ def rotation_matrix(roll, pitch, yaw):
 def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
            arm1, arm2, arm3, arm4, arm5, arm6,
            disc1, disc2, disc3, disc4, disc5, disc6, 
-           dt):
+           dt, ellipsoid_axes=None, ellipsoid_surf=None):
     '''Update 3D plot to animate it.'''
 
     # Extract current position and attitude
@@ -108,6 +108,19 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
     # Update displayed time stamp
     time_text.set_text(f"t = {i*dt:.2f} s")
 
+    # Udpate ellipsoid
+    if ellipsoid_axes is not None and ellipsoid_surf is not None:
+            a, b, c = ellipsoid_axes
+            u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
+            x_ell = p[0] + a * np.cos(u) * np.sin(v)
+            y_ell = p[1] + b * np.sin(u) * np.sin(v)
+            z_ell = p[2] + c * np.cos(v)
+            ellipsoid_surf[0].remove() 
+            ellipsoid_surf[0] = plt.gca().plot_surface(
+                x_ell, y_ell, z_ell,
+                color="cyan", alpha=0.2, linewidth=0
+            )
+
     return (axx, axy, axz,
             arm1, arm2, arm3, arm4, arm5, arm6,
             disc1, disc2, disc3, disc4, disc5, disc6,
@@ -117,7 +130,7 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
 # Main function
 # =========================================================
 
-def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
+def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200, ellipsoid_axes=None):
     '''Generate and animated 3D plot for STH simulation.'''
 
     # *** SET UP FIGURE AND 3D AXES ***
@@ -179,6 +192,19 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
                 color='gray', alpha=0.3, linewidth=0
             )
 
+    # Ellipsoid
+    ellipsoid_surf = [None]
+    if ellipsoid_axes is not None:
+        # inizialmente centrato sul primo punto
+        a, b, c = ellipsoid_axes
+        p0 = pos[0]
+        u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:15j]
+        x_ell = p0[0] + a * np.cos(u) * np.sin(v)
+        y_ell = p0[1] + b * np.sin(u) * np.sin(v)
+        z_ell = p0[2] + c * np.cos(v)
+        ellipsoid_surf[0] = ax.plot_surface(x_ell, y_ell, z_ell, color="cyan", alpha=0.2, linewidth=0)
+
+
     # *** ANIMATE PLOT ***
     # Animation object
     ani = FuncAnimation(
@@ -188,7 +214,7 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
         fargs=(pos, angles, axx, axy, axz, trail_line, time_text,
                arm1, arm2, arm3, arm4, arm5, arm6,
                disc1, disc2, disc3, disc4, disc5, disc6,
-               dt),
+               dt, ellipsoid_axes, ellipsoid_surf),
         interval=dt*1000  # conversion to milliseconds
     )
 

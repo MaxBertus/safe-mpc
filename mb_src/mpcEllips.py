@@ -23,8 +23,8 @@ class Params:
         self.alpha_tilt = np.deg2rad(20)
         self.g = 9.81
         self.robot_name = "aSTedH"
-        self.maxRad = 0.0
-
+        self.drone_axes = np.array([0.525, 0.475, 0.2 ])
+            
         # *** MPC PARAMETERS ***
         self.nx = 12
         self.nu = 6
@@ -139,15 +139,28 @@ class SthModel:
         h_min = []
         h_max = []
 
+        axes = ca.DM(params.drone_axes)
+        Qb_inv = ca.diag(1.0 / axes**2)
+
         for obs in params.obstacles:
             c = obs["center"]
             r = obs["radius"]
 
-            h = (p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2
-            h_expr.append(h)
+            delta = vertcat(
+                p[0] - c[0],
+                p[1] - c[1],
+                p[2] - c[2]
+            )
 
-            h_min.append((r+params.maxRad)**2)
-            h_max.append(1e10)
+            # CORRECT rotation of inverse metric
+            Qw_inv = ca.mtimes([R, Qb_inv, R.T])
+
+            # normalized ellipsoidal distance
+            h = ca.mtimes([delta.T, Qw_inv, delta])
+
+            h_expr.append(h)
+            h_min.append(r)
+            h_max.append(1e6) 
 
         self.h_expr = vertcat(*h_expr)
         self.h_min = np.array(h_min)
