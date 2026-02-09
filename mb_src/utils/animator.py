@@ -32,6 +32,7 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
            arm1, arm2, arm3, arm4, arm5, arm6,
            disc1, disc2, disc3, disc4, disc5, disc6, 
            dt):
+    '''Update 3D plot to animate it.'''
 
     # Extract current position and attitude
     p = pos[i]
@@ -113,12 +114,13 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
             trail_line, time_text)
 
 # =========================================================
-# Main
+# Main function
 # =========================================================
 
 def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
+    '''Generate and animated 3D plot for STH simulation.'''
 
-    # Set up figure and 3D axis
+    # *** SET UP FIGURE AND 3D AXES ***
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
 
@@ -133,6 +135,7 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
 
     ax.set_box_aspect([1, 1, 1])
 
+    # *** DEFINE DRONE, TRAIL LINE AND OBSTACLES ***
     # Drone axes
     axx, = ax.plot([], [], [], color="red", linewidth=2)
     axy, = ax.plot([], [], [], color="green", linewidth=2)
@@ -176,6 +179,7 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200):
                 color='gray', alpha=0.3, linewidth=0
             )
 
+    # *** ANIMATE PLOT ***
     # Animation object
     ani = FuncAnimation(
         fig,

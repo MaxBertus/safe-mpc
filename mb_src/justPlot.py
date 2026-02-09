@@ -13,4 +13,4 @@ if __name__ == "__main__":
     model = SthModel(params)
 
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
-    plotter(traj_path, model, params, animate=False)
+    plotter(traj_path, model, params, animate=True)

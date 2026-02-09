@@ -6,19 +6,14 @@ from rich.traceback import install
 install(show_locals=True)
 
 def plotter(file_path=None, model=None, params=None, animate=False):
-    
-    # =========================================================
-    # CHECK INPUTS
-    # =========================================================
+    '''Plot states, input and wrench of STH simulation. '''
 
+    # *** CHECK INPUTS ***
     if any(v is None for v in (file_path, model, params)):
         missing = [n for n, v in (("file_path", file_path), ("model", model), ("params", params)) if v is None]
         raise ValueError(f"ERROR [plotter]: missing {', '.join(missing)}")
 
-    # =========================================================
-    # LOAD DATA
-    # =========================================================
-    
+    # *** LOAD AND PREPARE DATA ***
     with open(file_path, "rb") as f:
         data = pickle.load(f)
 
@@ -26,8 +21,8 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     uHistory = data["ug"]        # (Ntraj, N, 6)
 
     print(f"Loaded data from {file_path}")
-    print(f"xHistory shape: {xHistory.shape}")
 
+    # Extract first simulation of batch
     if xHistory.ndim == 3:
         N = xHistory.shape[1] - 1
         xHistory = xHistory[-1, :, :]   # (N+1, 12)
@@ -37,22 +32,22 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         xHistory = xHistory[:N, :]      # (N, 12)
         uHistory = uHistory[:, :]       # (N, 6)
 
-    time = np.arange(0, params.SimDuration, params.dt)
+    # Define time array
+    time = params.time
 
-    xref = params.x_ref
+    # Define state and input references
+    x_ref = params.x_ref
     if params.use_u_ref_hovering:
         uref = np.linalg.pinv(model.R(params.x_ref).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
     else:
         uref = np.zeros(params.nu)
 
-    # Helper
+    # Helper function
     rad2deg = lambda x: x * 180.0 / np.pi
 
-    # =========================================================
-    # PLOTTER
-    # =========================================================
 
-    # *** States [0:6] ***
+    # *** PLOTTER ***
+    # States [0:6]
     fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
     fig.suptitle("First part of state = [positions, euler angles]")
 
@@ -62,20 +57,19 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     for i, ax in enumerate(axs.flat):
         if i < 3:
-            ax.axhline(y=xref[i], color='r', linestyle='--')
+            ax.axhline(y=x_ref[i], color='r', linestyle='--')
             ax.plot(time, xHistory[:, i], color='b')
         else:
-            ax.axhline(y=rad2deg(xref[i]), color='r', linestyle='--')
+            ax.axhline(y=rad2deg(x_ref[i]), color='r', linestyle='--')
             ax.plot(time, rad2deg(xHistory[:, i]), color='b')
             
-
         ax.set_title(labels[i])
         ax.set_ylabel(ylabels[i])
         ax.set_xlabel("time [s]")
         ax.grid(True)
         ax.legend(["reference", "actual"])
 
-    # *** States [7:12] ***
+    # States [7:12] 
     fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
     fig.suptitle("Second part of state = [linear velocities, angular velocities]")
 
@@ -86,8 +80,10 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     for i, ax in enumerate(axs.flat):
         idx = i + 6
         if i < 3:
+            ax.axhline(y=x_ref[idx], color='r', linestyle='--')
             ax.plot(time, xHistory[:, idx], color='b')
         else:
+            ax.axhline(y=x_ref[idx], color='r', linestyle='--')
             ax.plot(time, rad2deg(xHistory[:, idx]), color='b')
 
         ax.set_title(labels[i])
@@ -96,7 +92,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax.grid(True)
         ax.legend(["actual"])
 
-    # *** Control inputs ***
+    # Control inputs 
     fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
     fig.suptitle("Control Inputs (ω²)")
 
@@ -111,7 +107,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax.grid(True)
         ax.legend()
 
-    # *** Produced wrench (if allocation matrices available) ***
+    # Produced wrench
     Force = (model.F @ uHistory.T).T   
     Torque = (model.M @ uHistory.T).T  
 
@@ -135,14 +131,12 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         axs[1, i].grid(True)
         axs[1, i].legend(["actual"])
 
-    ## SHOW ALL FIGURES ###
+    # *** SHOW ALL FIGURES ***
     plt.show()
 
-    # =========================================================
-    # ANIMATION
-    # =========================================================
-    pos = xHistory[:, 0:3]        # (N, 3)
-    angles = xHistory[:, 3:6]     # (N, 3)
-
-    animator(pos, angles, obstacles=params.obstacles, dt=params.dt, num_steps=N)
+    # *** ANIMATION ***
+    if animate:
+        pos = xHistory[:, 0:3]        # (N, 3)
+        angles = xHistory[:, 3:6]     # (N, 3)
+        animator(pos, angles, obstacles=params.obstacles, dt=params.dt, num_steps=N)
 

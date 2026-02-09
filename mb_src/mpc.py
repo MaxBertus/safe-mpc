@@ -10,11 +10,10 @@ from tqdm import tqdm
 # =========================================================
 # PARAMETERS
 # =========================================================
-
 class Params:
     def __init__(self):
 
-        # *** MODEL PARAMETERS ***
+        # *** MODEL PARAMETERS  ***
         self.mass = 3.5
         self.J = np.diag([0.155, 0.147, 0.251])
         self.l = 0.385
@@ -36,10 +35,11 @@ class Params:
         self.N = 30
 
         # *** SIMULATION PARAMETERS ***
-        self.SimDuration = 5.0
+        self.SimDuration = 5.0  
         self.dt = 0.01
         self.dtSim = 0.001
-        self.nsub = int( self.dt / self.dtSim )
+        self.nsub = int( self.dt / self.dtSim )  # Number of simulation steps for each control steps
+        self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
         self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -56,11 +56,10 @@ class Params:
 # =========================================================
 # MODEL GENERATION
 # =========================================================
-
 class SthModel:
     def __init__(self, params):
-        self.r = params.cf / params.ct * params.l
-
+    
+        # *** PROBLEM VARIABLES DEFINITION ***
         self.nx = params.nx
         self.nu = params.nu
 
@@ -72,8 +71,9 @@ class SthModel:
         v = x[6:9]
         omega = x[9:12]
 
-        roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
+        roll, pitch, yaw = rpy[0], rpy[1], rpy[2] 
 
+        # *** ROTATION MATRIX DEFINITION ***
         R_x = vertcat(
             horzcat(1, 0, 0),
             horzcat(0, cos(roll), -sin(roll)),
@@ -94,9 +94,12 @@ class SthModel:
 
         self.R = ca.Function('R', [x], [R])
 
+        # *** WRENCH MATRICES DEFINITION ***
         sin_a = np.sin(params.alpha_tilt)
         cos_a = np.cos(params.alpha_tilt)
         tan_a = np.tan(params.alpha_tilt)
+
+        self.r = params.cf / params.ct * params.l
 
         self.F = params.u_bar * params.cf * np.array([
         [0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a, 0, np.sqrt(3)/2 * sin_a, -np.sqrt(3)/2 * sin_a],
@@ -110,9 +113,11 @@ class SthModel:
             [self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a, self.r * sin_a + cos_a, -self.r * sin_a - cos_a]
         ])
 
+        # *** CONTROL WRENCH DEFINITION ***   
         fc = R @ (self.F @  u)
         tc = self.M @ u
 
+        # *** DYNAMICS DEFINITION ***
         Tinv = vertcat(
             horzcat(1, sin(roll)*tan(pitch), cos(roll)*tan(pitch)),
             horzcat(0, cos(roll), -sin(roll)),
@@ -128,6 +133,7 @@ class SthModel:
 
         self.f_expl_func = ca.Function("f_expl", [x, u], [f_expl])
 
+        # *** OBSTACLE CONSTRAINTS DEFINITION ***
         h_expr = []
         h_min = []
         h_max = []
@@ -146,6 +152,11 @@ class SthModel:
         self.h_min = np.array(h_min)
         self.h_max = np.array(h_max)
 
+        # *** INPUT CONSTRAINTS DEFINITION ***
+        self.u_min = np.zeros(self.nu)
+        self.u_max = np.ones(self.nu)
+
+        # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
         model.name = params.robot_name
         model.x = x
@@ -154,13 +165,9 @@ class SthModel:
 
         self.amodel = model
 
-        self.u_min = np.zeros(self.nu)
-        self.u_max = np.ones(self.nu)
-
 # =========================================================
 # INITIAL GUESS
 # =========================================================
-
 def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
     """
     Initialize the OCP with a state and control guess.
@@ -170,17 +177,20 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
     x_guess : state guess (nx,) or (N+1, nx)
     """
 
+    # *** DIMENSIONS DEFINITION ***
     N = params.N
     nx = model.nx
     nu = model.nu
 
-    # Default guesses
+    # *** DEFAULT GUESSES DEFINITION ***
     if u_guess is None:
         u_guess = np.zeros(nu)
 
     if x_guess is None:
         x_guess = x0.copy()
 
+    # *** CUSTOM GUESSES ASSIGNMENT ***
+    # Intermidiate steps
     for k in range(N):
         if u_guess.ndim == 1:
             solver.set(k, "u", u_guess)
@@ -192,17 +202,17 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
         else:
             solver.set(k, "x", x_guess[k])
 
-    # Terminal state
+    # Terminal step
     if x_guess.ndim == 1:
         solver.set(N, "x", x_guess)
     else:
         solver.set(N, "x", x_guess[N])
 
 # =========================================================
-# MPC + SIMULATION
+# CREATE SIMULATOR
 # =========================================================
-
 def create_acados_sim(model, params):
+    '''Create acados simulation object.'''
     sim = AcadosSim()
     sim.model = model.amodel
 
@@ -213,13 +223,75 @@ def create_acados_sim(model, params):
 
     return AcadosSimSolver(sim, json_file="acados_sim.json")
 
-def run_mpc(model, params):
+# =========================================================
+# ROLLBACK GUESS
+# =========================================================
+def rollback_guess(solver, model, params, x_current):
+    """
+    Shift MPC solution and reinitialize the solver with the new guess.
 
+    Returns
+    -------
+    u0 : np.ndarray
+        Control input to apply at the current step.
+    """
+
+    N = params.N
+
+    # *** RETRIEVE SOLUTION ***
+    x_sol = np.array([solver.get(k, "x") for k in range(N + 1)])
+    u_sol = np.array([solver.get(k, "u") for k in range(N)])
+
+    # *** SHIFT SOLUTION ***
+    x_guess = np.vstack([x_sol[1:], x_sol[-1]])
+    u_guess = np.vstack([u_sol[1:], u_sol[-1]])
+
+    # *** SET GUESS ***
+    initialize_guess(
+        solver,
+        model,
+        params,
+        x_current,
+        u_guess=u_guess,
+        x_guess=x_guess
+    )
+
+    # *** RETURN FIRST CONTROL INPUT ***
+    return u_sol[0]
+
+# =========================================================
+# DYNAMICS SIMULATION
+# =========================================================
+def dynamicsSim(sim_solver, x, u, nsub):
+    """
+    Simulate the system using multiple sub-steps.
+
+    Returns
+    -------
+    x : np.ndarray
+        Updated state after simulation.
+    """
+
+    for _ in range(nsub):
+        sim_solver.set("x", x)
+        sim_solver.set("u", u)
+        sim_solver.solve()
+        x = sim_solver.get("x")
+
+    return x
+
+# =========================================================
+# MPC + SIMULATION
+# =========================================================
+def run_mpc(model, params):
+    '''Compute, apply and simulate MPC control.'''
+    
+    # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
     ny = nx + nu
     ny_e = nx
-    time = np.arange(0, params.SimDuration, params.dt)
 
+    # *** OCP OBJECT CREATION ***
     ocp = AcadosOcp()
     ocp.model = model.amodel
     ocp.dims.N = params.N
@@ -228,6 +300,7 @@ def run_mpc(model, params):
     ocp.cost.cost_type = "LINEAR_LS"
     ocp.cost.cost_type_e = "LINEAR_LS"
 
+    # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
     Vx[:nx, :nx] = np.eye(nx)
 
@@ -256,12 +329,15 @@ def run_mpc(model, params):
     ocp.cost.yref = np.hstack((x_ref, u_ref))
     ocp.cost.yref_e = x_ref
 
+    # *** CONSTRAINTS DEFINITION ***
+    # Input
     ocp.constraints.constr_type = "BGH"
     ocp.constraints.lbu = model.u_min
     ocp.constraints.ubu = model.u_max
     ocp.constraints.idxbu = np.arange(nu)
     ocp.constraints.x0 = np.zeros(nx)  
     
+    # State
     if params.state_constraint_active:
         ocp.constraints.ubx = np.array([params.zlim])  
         ocp.constraints.lbx = np.array([0.0]) 
@@ -271,6 +347,7 @@ def run_mpc(model, params):
         ocp.constraints.lbx_e = np.array([0.0]) 
         ocp.constraints.idxbx_e = np.array([2])
 
+    # Obstacles
     ocp.model.con_h_expr_0 = model.h_expr
     ocp.constraints.lh_0 = model.h_min
     ocp.constraints.uh_0 = model.h_max
@@ -283,6 +360,7 @@ def run_mpc(model, params):
     ocp.constraints.lh_e = model.h_min
     ocp.constraints.uh_e = model.h_max
 
+    # *** SOLVER PARAMETERS DEFINITION ***
     ocp.solver_options.integrator_type = "ERK"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
@@ -290,9 +368,11 @@ def run_mpc(model, params):
 
     ocp.solver_options.nlp_solver_max_iter = 200
 
+    # *** SOLVERS CREATION ***
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
     sim_solver = create_acados_sim(model, params)
 
+    # *** VARIABLES DEFINITION ***
     x = np.zeros(nx)
     xg = [x.copy()]
     ug = []
@@ -300,6 +380,7 @@ def run_mpc(model, params):
     x_prev = x
     u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
     
+    # *** FIRST INITIALIZATION ***
     initialize_guess(
         solver,
         model,
@@ -309,33 +390,18 @@ def run_mpc(model, params):
         x_guess=x_prev
     )
 
-    for ist in tqdm(range(time.shape[0]), desc="MPC Simulation Progress"): 
+    # *** MPC LOOP ***
+    for ist in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
 
-        solver.set(0, "lbx", x)
-        solver.set(0, "ubx", x)
+        solver.solve_for_x0(x, False, False)
 
-        solver.solve()
-        status = solver.get_status()
+        u = rollback_guess(solver, model, params, x)
+        x = dynamicsSim(sim_solver, x, u, params.nsub)
 
-        x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
-        u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
-
-        x_guess = np.vstack([x_sol[1:], x_sol[-1]]) 
-        u_guess = np.vstack([u_sol[1:], u_sol[-1]])  
-
-        initialize_guess(solver, model, params, x, u_guess=u_guess, x_guess=x_guess)
-
-        u = u_sol[0]
         ug.append(u)
-
-        for _ in range(params.nsub):
-            sim_solver.set("x", x)
-            sim_solver.set("u", u)
-            status_sim = sim_solver.solve()
-            x = sim_solver.get("x")
-
         xg.append(x.copy())
 
+    # *** DATA SAVING ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
     data = {
         "xg": np.asarray(xg),
@@ -351,11 +417,14 @@ def run_mpc(model, params):
 
 if __name__ == "__main__":
 
+    # *** RETRIEVE PARAMETERS AND MODEL ***
     params = Params()
     model = SthModel(params)
 
+    # *** RUN MPC ***
     run_mpc(model, params)
-
     print("MPC simulation completed. Trajectory saved to 'trajectory.pkl'.")
+
+    # *** PLOT DATA ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
-    plotter(traj_path, model, params, animate=False)
+    plotter(traj_path, model, params, animate=True)
