@@ -144,5 +144,5 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         else:
             ell_axes = None
 
-        animator(pos, angles, params, ellipsoid_axes=ell_axes)
+        animator(pos, angles, params)
 

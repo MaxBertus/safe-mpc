@@ -23,7 +23,9 @@ class Params:
         self.alpha_tilt = np.deg2rad(20)
         self.g = 9.81
         self.robot_name = "aSTedH"
-        self.maxRad = 0.4
+        self.propRad = 0.172
+        self.maxRad = self.l + self.propRad
+        
 
         # *** MPC PARAMETERS ***
         self.nx = 12
@@ -43,21 +45,21 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([0.0, 0.1, 0.5]), "dimensions": np.array([0.2, 0.2, 0.2]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 0.75]), "radius": 0.1, "type": "sphere"},    
+            {"center": np.array([0.0, 0.1, 1.5]), "dimensions": np.array([0.2, 0.2, 0.2]), "type": "box"},
+            #{"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
         self.state_constraint_active = True
-        self.xlim = [-2.0, 2.0]
-        self.ylim = [-2.0, 2.0] 
-        self.zlim = [-2.0, 2.0]
+        self.xlim = [-3.0, 3.0]
+        self.ylim = [-3.0, 3.0] 
+        self.zlim = [-2.0, 4.0]
 
 # =========================================================
 # MODEL GENERATION
@@ -371,12 +373,12 @@ def run_mpc(model, params):
     
     # State
     if params.state_constraint_active:
-        ocp.constraints.lbx = np.array([params.xlim[0], params.ylim[0], params.zlim[0]])  
-        ocp.constraints.ubx = np.array([params.xlim[1], params.ylim[1], params.zlim[1]])  
+        ocp.constraints.lbx = np.array([params.xlim[0]+params.maxRad, params.ylim[0]+params.maxRad, params.zlim[0]+params.maxRad])  
+        ocp.constraints.ubx = np.array([params.xlim[1]-params.maxRad, params.ylim[1]-params.maxRad, params.zlim[1]-params.maxRad])  
         ocp.constraints.idxbx = np.arange(3)
 
-        ocp.constraints.lbx_e = np.array([params.xlim[0], params.ylim[0], params.zlim[0]])  
-        ocp.constraints.ubx_e = np.array([params.xlim[1], params.ylim[1], params.zlim[1]])  
+        ocp.constraints.lbx_e = np.array([params.xlim[0]+params.maxRad, params.ylim[0]+params.maxRad, params.zlim[0]+params.maxRad])  
+        ocp.constraints.ubx_e = np.array([params.xlim[1]-params.maxRad, params.ylim[1]-params.maxRad, params.zlim[1]-params.maxRad])  
         ocp.constraints.idxbx_e = np.arange(3)
 
     # Obstacles 
