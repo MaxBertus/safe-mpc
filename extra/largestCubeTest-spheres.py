@@ -51,7 +51,8 @@ def generate_random_spheres_outside_box(N, inner_half=0.5, outer_half=2.0, radiu
 
 if __name__ == "__main__":
 
-    for r in range(1, 5):
+    counter = 0
+    for r in range(1, 50):
 
         np.random.seed(r)
 
@@ -69,7 +70,7 @@ if __name__ == "__main__":
         x_min, x_max, y_min, y_max, z_min, z_max, exitflag = min_cube_select(Q, R)
 
         if exitflag <= 0:
-            print(f"Warning: Optimization failed at iteration {r}")
+            print(f"Warning: Optimization failed at iteration {r}, so the {counter} time")
             continue
 
         # Visualize

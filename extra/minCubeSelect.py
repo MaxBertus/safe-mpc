@@ -21,7 +21,7 @@ def min_cube_select(Q, R):
     """
 
     # Initial guess (small box)
-    x0 = np.array([-0.01, 0.01, -0.01, 0.01, -0.01, 0.01])
+    x0 = np.array([-0.5, 0.5, -0.5, 0.5, -0.5, 0.5])
 
     # Bounds (origin must be inside)
     bounds = [
@@ -83,7 +83,7 @@ def min_cube_select_boxes(Q, D):
     """
 
     # Initial guess (small cube around origin)
-    x0 = np.array([-0.01, 0.01, -0.01, 0.01, -0.01, 0.01])
+    x0 = np.array([-0.5, 0.5, -0.5, 0.5, -0.5, 0.5])
 
     # Bounds (we assume [-1,1] for all directions)
     bounds = [
@@ -96,7 +96,7 @@ def min_cube_select_boxes(Q, D):
     def objective(x):
         return -box_volume(x)
 
-    constraints = {"type": "ineq", "fun": lambda x: box_box_distance_squared(x, Q, D)}
+    constraints = {"type": "ineq", "fun": lambda x: box_box_constraints(x, Q, D)}
 
     result = minimize(
         objective,
@@ -155,20 +155,20 @@ def sphere_box_constraints(x, Q, R):
 
     return c
 
-def box_box_distance_squared(x, centers, half_dims):
+def box_box_constraints(x, centers, half_dims, eps=1e-4):
     xMin, xMax, yMin, yMax, zMin, zMax = x
     N = centers.shape[0]
     c = np.zeros(N)
-    
+
     for i in range(N):
         cx, cy, cz = centers[i]
         dx, dy, dz = half_dims[i]
-        
-        # distanza lungo ogni asse (positiva se non interseca)
+
         dist_x = max(0, (cx - dx) - xMax, xMin - (cx + dx))
         dist_y = max(0, (cy - dy) - yMax, yMin - (cy + dy))
         dist_z = max(0, (cz - dz) - zMax, zMin - (cz + dz))
-        
-        c[i] = dist_x**2 + dist_y**2 + dist_z**2
-    
+
+        c[i] = dist_x**2 + dist_y**2 + dist_z**2 - eps
+
     return c
+

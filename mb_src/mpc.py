@@ -51,8 +51,8 @@ class Params:
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([0.0, 0.1, 1.5]), "dimensions": np.array([0.2, 0.2, 0.2]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            #{"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
