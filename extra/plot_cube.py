@@ -1,15 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-
-def draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max):
+def draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max, color='red', alpha=0.1, linestyle='--'):
     """
     Draw a 3D box with given boundaries.
     """
-
-    # Define the 8 vertices of the box
     vertices = np.array([
         [x_min, y_min, z_min],
         [x_max, y_min, z_min],
@@ -20,34 +16,53 @@ def draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max):
         [x_max, y_max, z_max],
         [x_min, y_max, z_max]
     ])
-
-    # Define the 6 faces
     faces = [
-        [vertices[j] for j in [0, 1, 2, 3]],  # Bottom
-        [vertices[j] for j in [4, 5, 6, 7]],  # Top
-        [vertices[j] for j in [0, 1, 5, 4]],  # Front
-        [vertices[j] for j in [3, 2, 6, 7]],  # Back
-        [vertices[j] for j in [0, 3, 7, 4]],  # Left
-        [vertices[j] for j in [1, 2, 6, 5]]   # Right
+        [vertices[j] for j in [0, 1, 2, 3]],
+        [vertices[j] for j in [4, 5, 6, 7]],
+        [vertices[j] for j in [0, 1, 5, 4]],
+        [vertices[j] for j in [3, 2, 6, 7]],
+        [vertices[j] for j in [0, 3, 7, 4]],
+        [vertices[j] for j in [1, 2, 6, 5]]
     ]
-
-    box = Poly3DCollection(
-        faces,
-        facecolors='red',
-        edgecolors='red',
-        linewidths=1.5,
-        linestyles='--',
-        alpha=0.1
-    )
-
+    box = Poly3DCollection(faces, facecolors=color, edgecolors=color, linewidths=1.5, linestyles=linestyle, alpha=alpha)
     ax.add_collection3d(box)
 
 
-def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, Q, R, plotter=None):
+def draw_boxes(ax, centers, half_dims, color='blue', alpha=0.3):
     """
-    Plot the optimal 3D box with obstacles and goal point.
+    Draw multiple axis-aligned boxes (obstacles) in 3D.
+    
+    Parameters
+    ----------
+    centers : ndarray, shape (N,3)
+        Centers of boxes.
+    half_dims : ndarray, shape (N,3)
+        Half-dimensions of each box along x,y,z.
     """
+    for i in range(centers.shape[0]):
+        cx, cy, cz = centers[i]
+        dx, dy, dz = half_dims[i]
+        draw_box(
+            ax,
+            cx - dx, cx + dx,
+            cy - dy, cy + dy,
+            cz - dz, cz + dz,
+            color=color,
+            alpha=alpha,
+            linestyle='-'
+        )
 
+
+def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, 
+              Q=None, R=None, centers=None, half_dims=None, plotter=None):
+    """
+    Plot the optimal 3D box with obstacles (spheres or boxes) and origin.
+    
+    Parameters
+    ----------
+    Q, R : obstacles as spheres (optional)
+    centers, half_dims : obstacles as boxes (optional)
+    """
     if plotter is None:
         fig = plt.figure()
     else:
@@ -56,71 +71,47 @@ def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, Q, R, plotter=None):
     ax = fig.add_subplot(111, projection='3d')
     ax.set_facecolor('white')
 
-    # Plot obstacle points
-    ax.scatter(Q[:, 0], Q[:, 1], Q[:, 2], s=10, c='b')
+    # Plot spherical obstacles
+    if Q is not None and R is not None:
+        u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:30j]
+        for i in range(Q.shape[0]):
+            x_sphere = Q[i, 0] + R[i] * np.cos(u) * np.sin(v)
+            y_sphere = Q[i, 1] + R[i] * np.sin(u) * np.sin(v)
+            z_sphere = Q[i, 2] + R[i] * np.cos(v)
+            ax.plot_surface(x_sphere, y_sphere, z_sphere, color='blue', alpha=0.3, linewidth=0)
 
-    # Draw spheres around each obstacle
-    u, v = np.mgrid[0:2*np.pi:30j, 0:np.pi:30j]
+        ax.scatter(Q[:,0], Q[:,1], Q[:,2], s=10, c='b')
 
-    for i in range(Q.shape[0]):
-        x_sphere = Q[i, 0] + R[i] * np.cos(u) * np.sin(v)
-        y_sphere = Q[i, 1] + R[i] * np.sin(u) * np.sin(v)
-        z_sphere = Q[i, 2] + R[i] * np.cos(v)
-
-        ax.plot_surface(
-            x_sphere, y_sphere, z_sphere,
-            color='blue', alpha=0.3, linewidth=0
-        )
+    # Plot box obstacles
+    if centers is not None and half_dims is not None:
+        draw_boxes(ax, centers, half_dims, color='blue', alpha=0.3)
 
     # Plot UAV at origin
-    ax.scatter(0, 0, 0, s=10, c='black', edgecolors='white')
-    ax.text(0, 0, -0.12, "UAV", color='black',
-            fontsize=8, ha='center', fontweight='bold')
+    ax.scatter(0, 0, 0, s=20, c='black', edgecolors='white')
+    ax.text(0, 0, -0.12, "UAV", color='black', fontsize=8, ha='center', fontweight='bold')
 
-    # Highlight boundary obstacles
-    idx = np.isclose(Q[:, 0], x_min) | np.isclose(Q[:, 0], x_max)
-    idy = np.isclose(Q[:, 1], y_min) | np.isclose(Q[:, 1], y_max)
-    idz = np.isclose(Q[:, 2], z_min) | np.isclose(Q[:, 2], z_max)
-    id_boundary = idx | idy | idz
-
-    ax.scatter(
-        Q[id_boundary, 0],
-        Q[id_boundary, 1],
-        Q[id_boundary, 2],
-        s=20, c='red'
-    )
+    # Draw UAV as a small sphere
+    uav_radius = 0.5  # raggio della sfera UAV
+    u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    x_sphere = uav_radius * np.cos(u) * np.sin(v)
+    y_sphere = uav_radius * np.sin(u) * np.sin(v)
+    z_sphere = uav_radius * np.cos(v)
+    ax.plot_surface(x_sphere, y_sphere, z_sphere, color='black', alpha=0.5)
 
     # Draw optimal box
-    draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max)
+    draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max, color='red', alpha=0.1, linestyle='--')
 
     # Compute and display volume
     volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
-    ax.text(
-        1.5, 1.5, 1.5,
-        f"Volume: {volume:.3f}",
-        color='red',
-        fontsize=8,
-        fontweight='bold'
-    )
+    ax.text(1.5, 1.5, 1.5, f"Volume: {volume:.3f}", color='red', fontsize=8, fontweight='bold')
 
-    # Axis limits and labels
-    ax.set_xlim([-1, 1])
-    ax.set_ylim([-1, 1])
-    ax.set_zlim([-1, 1])
-
-    ax.set_box_aspect([1, 1, 1])
-
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-
-    # Draw coordinate axes
-    ax.plot([0, 0], [0, 0], [-1, 1], 'k--', linewidth=0.5)
-    ax.plot([0, 0], [-1, 1], [0, 0], 'k--', linewidth=0.5)
-    ax.plot([-1, 1], [0, 0], [0, 0], 'k--', linewidth=0.5)
-
-    ax.set_box_aspect([1, 1, 1])
+    # Axis limits, labels, and grid
+    ax.set_xlim([-2,2]); ax.set_ylim([-2,2]); ax.set_zlim([-2,2])
+    ax.set_box_aspect([1,1,1])
+    ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    ax.plot([0,0],[0,0],[-2,2],'k--', linewidth=0.5)
+    ax.plot([0,0],[-2,2],[0,0],'k--', linewidth=0.5)
+    ax.plot([-2,2],[0,0],[0,0],'k--', linewidth=0.5)
     ax.view_init(elev=20, azim=30)
     ax.grid(True)
-
     plt.show()
