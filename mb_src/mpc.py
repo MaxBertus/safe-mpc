@@ -1,6 +1,6 @@
 import numpy as np
 import casadi as ca
-from casadi import MX, vertcat, horzcat, sin, cos, tan, cross
+from casadi import MX, vertcat, horzcat, sin, cos, tan, cross, fmin, fmax
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 from utils.plotter import plotter
 import os
@@ -23,7 +23,7 @@ class Params:
         self.alpha_tilt = np.deg2rad(20)
         self.g = 9.81
         self.robot_name = "aSTedH"
-        self.maxRad = 0.0
+        self.maxRad = 0.4
 
         # *** MPC PARAMETERS ***
         self.nx = 12
@@ -33,7 +33,7 @@ class Params:
                            1e1, 1e1, 1e1,   # linear velocities 
                            5e1, 5e1, 5e1])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
-        self.N = 30
+        self.N = 50
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
@@ -43,16 +43,21 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.0, 1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
+        # Obstacles
         self.obstacles = [
-            {"center": np.array([0.0, 0.0, 0.5]), "radius": 0.1},
-            # {"center": np.array([0.5, 0.5, 1.2]), "radius": 0.25},            
+            #{"center": np.array([0.0, 0.1, 0.5]), "dimensions": np.array([0.2, 0.2, 0.2]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 0.75]), "radius": 0.1, "type": "sphere"},    
         ]
-        self.state_constraint_active = False
-        self.zlim = 4.0
+        
+        # Room dimensions
+        self.state_constraint_active = True
+        self.xlim = [-2.0, 2.0]
+        self.ylim = [-2.0, 2.0] 
+        self.zlim = [-2.0, 2.0]
 
 # =========================================================
 # MODEL GENERATION
@@ -134,20 +139,46 @@ class SthModel:
 
         self.f_expl_func = ca.Function("f_expl", [x, u], [f_expl])
 
-        # *** OBSTACLE CONSTRAINTS DEFINITION ***
+        # *** OBSTACLE CONSTRAINTS DEFINITION (BOXES) ***
         h_expr = []
         h_min = []
         h_max = []
 
         for obs in params.obstacles:
-            c = obs["center"]
-            r = obs["radius"]
 
-            h = (p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2
-            h_expr.append(h)
+            if obs["type"] == "sphere":
 
-            h_min.append((r+params.maxRad)**2)
-            h_max.append(1e10)
+                c = obs["center"]
+                r = obs["radius"]
+
+                h = (p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2
+                h_expr.append(h)
+
+                h_min.append((r+params.maxRad)**2)
+                h_max.append(1e10)
+
+            elif obs["type"] == "box":
+
+                c = obs["center"]
+                d = obs["dimensions"]
+
+                # Compute closest point on box using clamping
+                p_closest_x = fmax(c[0] - d[0]/2, fmin(p[0], c[0] + d[0]/2))
+                p_closest_y = fmax(c[1] - d[1]/2, fmin(p[1], c[1] + d[1]/2))
+                p_closest_z = fmax(c[2] - d[2]/2, fmin(p[2], c[2] + d[2]/2))
+
+                # Squared distance from drone center to closest point on box
+                d_squared = (p[0] - p_closest_x)**2 + \
+                            (p[1] - p_closest_y)**2 + \
+                            (p[2] - p_closest_z)**2
+
+                # Constraint: d_squared >= maxRad^2
+                # Reformulated as: h = d_squared - maxRad^2 >= 0
+                h = d_squared - params.maxRad**2
+                h_expr.append(h)
+
+                h_min.append(0.0)
+                h_max.append(1e10)
 
         self.h_expr = vertcat(*h_expr)
         self.h_min = np.array(h_min)
@@ -340,15 +371,15 @@ def run_mpc(model, params):
     
     # State
     if params.state_constraint_active:
-        ocp.constraints.ubx = np.array([params.zlim])  
-        ocp.constraints.lbx = np.array([0.0]) 
-        ocp.constraints.idxbx = np.array([2])
+        ocp.constraints.lbx = np.array([params.xlim[0], params.ylim[0], params.zlim[0]])  
+        ocp.constraints.ubx = np.array([params.xlim[1], params.ylim[1], params.zlim[1]])  
+        ocp.constraints.idxbx = np.arange(3)
 
-        ocp.constraints.ubx_e = np.array([params.zlim])  
-        ocp.constraints.lbx_e = np.array([0.0]) 
-        ocp.constraints.idxbx_e = np.array([2])
+        ocp.constraints.lbx_e = np.array([params.xlim[0], params.ylim[0], params.zlim[0]])  
+        ocp.constraints.ubx_e = np.array([params.xlim[1], params.ylim[1], params.zlim[1]])  
+        ocp.constraints.idxbx_e = np.arange(3)
 
-    # Obstacles
+    # Obstacles 
     ocp.model.con_h_expr_0 = model.h_expr
     ocp.constraints.lh_0 = model.h_min
     ocp.constraints.uh_0 = model.h_max

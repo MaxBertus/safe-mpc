@@ -31,7 +31,7 @@ def rotation_matrix(roll, pitch, yaw):
 def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
            arm1, arm2, arm3, arm4, arm5, arm6,
            disc1, disc2, disc3, disc4, disc5, disc6, 
-           dt, ellipsoid_axes=None, ellipsoid_surf=None):
+           dt, ax, ellipsoid_axes=None, ellipsoid_surf=None):
     '''Update 3D plot to animate it.'''
 
     # Extract current position and attitude
@@ -116,7 +116,7 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
             y_ell = p[1] + b * np.sin(u) * np.sin(v)
             z_ell = p[2] + c * np.cos(v)
             ellipsoid_surf[0].remove() 
-            ellipsoid_surf[0] = plt.gca().plot_surface(
+            ellipsoid_surf[0] = ax.plot_surface(
                 x_ell, y_ell, z_ell,
                 color="cyan", alpha=0.2, linewidth=0
             )
@@ -130,18 +130,25 @@ def update(i, pos, angles, axx, axy, axz, trail_line, time_text,
 # Main function
 # =========================================================
 
-def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200, ellipsoid_axes=None):
+def animator(pos, angles, params, ellipsoid_axes=None):
     '''Generate and animated 3D plot for STH simulation.'''
-
+    # *** LOAD DATA ***
+    obstacles = params.obstacles
+    dt = params.dt
+    num_steps = pos.shape[0]
+    xlim = params.xlim
+    ylim = params.ylim
+    zlim = params.zlim
+    
     # *** SET UP FIGURE AND 3D AXES ***
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
 
     time_text = fig.text(0.5, 0.02, "", ha="center", fontsize=12)
 
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
-    ax.set_zlim(-1, 1)
+    ax.set_xlim(xlim[0], xlim[1])
+    ax.set_ylim(ylim[0], ylim[1])
+    ax.set_zlim(zlim[0], zlim[1])
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
@@ -174,23 +181,70 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200, ellipsoid_axes
     trail_line, = ax.plot([], [], [], color="red", linewidth=0.8)
 
     # Obstacles
-    if obstacles is not None:
-        u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+    if obstacles != []:
 
         for obs in obstacles:
-            c = obs["center"]
-            r = obs["radius"]
 
-            # Create a sphere
-            
-            x_sphere = c[0] + r * np.cos(u) * np.sin(v)
-            y_sphere = c[1] + r * np.sin(u) * np.sin(v)
-            z_sphere = c[2] + r * np.cos(v)
+            if obs["type"] == "sphere":
 
-            ax.plot_surface(
-                x_sphere, y_sphere, z_sphere,
-                color='gray', alpha=0.3, linewidth=0
-            )
+                u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:10j]
+                
+                c = obs["center"]
+                r = obs["radius"]
+
+                # Create a sphere
+                
+                x_sphere = c[0] + r * np.cos(u) * np.sin(v)
+                y_sphere = c[1] + r * np.sin(u) * np.sin(v)
+                z_sphere = c[2] + r * np.cos(v)
+
+                ax.plot_surface(
+                    x_sphere, y_sphere, z_sphere,
+                    color='gray', alpha=0.3, linewidth=0
+                )
+
+            elif obs["type"] == "box":
+                c = obs["center"]
+                d = obs["dimensions"]
+                
+                # Calculate box vertices
+                x_min, y_min, z_min = c[0] - d[0]/2, c[1] - d[1]/2, c[2] - d[2]/2
+                x_max, y_max, z_max = c[0] + d[0]/2, c[1] + d[1]/2, c[2] + d[2]/2
+                
+                # Define the 8 vertices of the box
+                vertices = np.array([
+                    [x_min, y_min, z_min],
+                    [x_max, y_min, z_min],
+                    [x_max, y_max, z_min],
+                    [x_min, y_max, z_min],
+                    [x_min, y_min, z_max],
+                    [x_max, y_min, z_max],
+                    [x_max, y_max, z_max],
+                    [x_min, y_max, z_max]
+                ])
+                
+                # Define the 6 faces of the box (each face is defined by 4 vertices)
+                faces = [
+                    [vertices[0], vertices[1], vertices[5], vertices[4]],  # Front face
+                    [vertices[2], vertices[3], vertices[7], vertices[6]],  # Back face
+                    [vertices[0], vertices[3], vertices[7], vertices[4]],  # Left face
+                    [vertices[1], vertices[2], vertices[6], vertices[5]],  # Right face
+                    [vertices[0], vertices[1], vertices[2], vertices[3]],  # Bottom face
+                    [vertices[4], vertices[5], vertices[6], vertices[7]]   # Top face
+                ]
+                
+                # Plot each face
+                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+                
+                face_collection = Poly3DCollection(
+                    faces, 
+                    alpha=0.3, 
+                    facecolor='gray', 
+                    edgecolor='darkgray',
+                    linewidths=1
+                )
+
+                ax.add_collection3d(face_collection)
 
     # Ellipsoid
     ellipsoid_surf = [None]
@@ -214,8 +268,14 @@ def animator(pos, angles, obstacles=None, dt=0.05, num_steps=200, ellipsoid_axes
         fargs=(pos, angles, axx, axy, axz, trail_line, time_text,
                arm1, arm2, arm3, arm4, arm5, arm6,
                disc1, disc2, disc3, disc4, disc5, disc6,
-               dt, ellipsoid_axes, ellipsoid_surf),
+               dt, ax, ellipsoid_axes, ellipsoid_surf),
         interval=dt*1000  # conversion to milliseconds
     )
+
+    def on_close(event):
+        if ani.event_source is not None: 
+            ani.event_source.stop()
+
+    fig.canvas.mpl_connect("close_event", on_close)
 
     plt.show()
