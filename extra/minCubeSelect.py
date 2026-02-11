@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize
 
-def min_cube_select(Q, R):
+def min_cube_select(Q, R=None):
     """
     Python equivalent of the MATLAB function minCubeSelect.
     
@@ -19,6 +19,9 @@ def min_cube_select(Q, R):
     exitflag : int
         Optimization success flag (1 = success, 0 = failure).
     """
+
+    if R is None:
+        R = np.zeros(Q.shape[0])
 
     # Initial guess (small box)
     x0 = np.array([-0.5, 0.5, -0.5, 0.5, -0.5, 0.5])
@@ -50,17 +53,28 @@ def min_cube_select(Q, R):
         method="trust-constr",
         bounds=bounds,
         constraints=constraints,
-        options={"disp": False}
     )
 
     xOpt = result.x
     exitflag = int(result.success)
 
+    eps = 1e-4
+    inside = (
+        (Q[:,0] - R >= xOpt[0]) &
+        (Q[:,0] + R <= xOpt[1]) &
+        (Q[:,1] - R >= xOpt[2]) &
+        (Q[:,1] + R <= xOpt[3]) &
+        (Q[:,2] - R >= xOpt[4]) &
+        (Q[:,2] + R <= xOpt[5])
+    )
+
+    all_outside = not np.any(inside)
+
     return (
         xOpt[0], xOpt[1],
         xOpt[2], xOpt[3],
         xOpt[4], xOpt[5],
-        exitflag
+        exitflag, all_outside,
     )
 
 def min_cube_select_boxes(Q, D):
@@ -126,7 +140,6 @@ def box_volume(x):
     dz = x[5] - x[4]
     return dx * dy * dz
 
-
 def sphere_box_constraints(x, Q, R):
     """
     Inequality constraints enforcing that each sphere
@@ -151,7 +164,7 @@ def sphere_box_constraints(x, Q, R):
         dist2 = dx**2 + dy**2 + dz**2
 
         # inequality: r^2 - dist^2 <= 0
-        c[i] = r**2 - dist2
+        c[i] = r**2 - dist2 + 1e-3
 
     return c
 

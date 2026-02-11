@@ -54,7 +54,7 @@ def draw_boxes(ax, centers, half_dims, color='blue', alpha=0.3):
 
 
 def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, 
-              Q=None, R=None, centers=None, half_dims=None, plotter=None):
+              Q=None, R=None, centers=None, half_dims=None, points=None, plotter=None):
     """
     Plot the optimal 3D box with obstacles (spheres or boxes) and origin.
     
@@ -85,6 +85,8 @@ def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max,
     # Plot box obstacles
     if centers is not None and half_dims is not None:
         draw_boxes(ax, centers, half_dims, color='blue', alpha=0.3)
+        if points is not None:
+            ax.scatter(points[:,0], points[:,1], points[:,2], s=10, c='cyan')
 
     # Plot UAV at origin
     ax.scatter(0, 0, 0, s=20, c='black', edgecolors='white')
