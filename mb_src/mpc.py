@@ -51,8 +51,8 @@ class Params:
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            #{"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            #{"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
@@ -60,11 +60,6 @@ class Params:
         self.xlim = [-3.0, 3.0]
         self.ylim = [-3.0, 3.0] 
         self.zlim = [-2.0, 4.0]
-
-        # *** REPULSIVE FIELD PARAMETERS ***
-        self.repulsive_gain = 1e2  # Weight of the repulsive cost
-        self.repulsive_influence_distance = 1.0  # Distance at which repulsive field activates
-
 
 # =========================================================
 # MODEL GENERATION
@@ -204,68 +199,12 @@ class SthModel:
         self.u_min = np.zeros(self.nu)
         self.u_max = np.ones(self.nu)
 
-        # *** REPULSIVE COST (SOFT) ***
-        rep_cost = 0
-        
-        for obs in params.obstacles:
-            if obs["type"] == "sphere":
-                # For sphere obstacles, use direct distance
-                c = obs["center"]
-                r = obs["radius"]
-                
-                # Distance from drone center to obstacle center
-                dist_to_center = ca.sqrt((p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2)
-                
-                # Safety sphere radius (obstacle + drone radius)
-                safety_radius = r + params.maxRad
-                
-                # Repulsive potential: activate when distance < safety_radius + influence_distance
-                activation_distance = safety_radius + params.repulsive_influence_distance
-                
-                # Smooth repulsive cost that increases as we get closer
-                # Cost is 0 when dist > activation_distance
-                # Cost increases as dist approaches safety_radius
-                penetration = activation_distance - dist_to_center
-                rep_cost += params.repulsive_gain * ca.fmax(0, penetration)**2
-                
-            elif obs["type"] == "box":
-                # For box obstacles, compute circumscribed sphere
-                c = obs["center"]
-                d = obs["dimensions"]
-                
-                # Radius of circumscribed sphere (half diagonal of the box)
-                sphere_radius = ca.norm_2(d) / 2.0
-                
-                # Distance from drone center to box center
-                dist_to_center = ca.sqrt((p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2)
-                
-                # Safety sphere radius (circumscribed sphere + drone radius)
-                safety_radius = sphere_radius + params.maxRad
-                
-                # Repulsive potential with same logic as sphere
-                activation_distance = safety_radius + params.repulsive_influence_distance
-                
-                # Smooth repulsive cost
-                penetration = activation_distance - dist_to_center
-                rep_cost += params.repulsive_gain * ca.fmax(0, penetration)**2
-
         # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
         model.name = params.robot_name
         model.x = x
         model.u = u
         model.f_expl_expr = f_expl
-
-        model.cost_expr_ext_cost = (
-            (x - params.x_ref).T @ params.Q @ (x - params.x_ref)
-            + u.T @ params.R @ u
-            + rep_cost
-        )
-
-        model.cost_expr_ext_cost_e = (
-            (x - params.x_ref).T @ params.Q @ (x - params.x_ref)
-            + rep_cost
-        )
 
         self.amodel = model
 
@@ -401,8 +340,8 @@ def run_mpc(model, params):
     ocp.dims.N = params.N
     ocp.solver_options.tf = params.N * params.dt
 
-    ocp.cost.cost_type = "EXTERNAL"
-    ocp.cost.cost_type_e = "EXTERNAL"
+    ocp.cost.cost_type = "LINEAR_LS"
+    ocp.cost.cost_type_e = "LINEAR_LS"
 
     # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
@@ -468,9 +407,9 @@ def run_mpc(model, params):
     ocp.solver_options.integrator_type = "ERK"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-    ocp.solver_options.nlp_solver_type = "SQP_RTI" 
+    ocp.solver_options.nlp_solver_type = "SQP" 
 
-    ocp.solver_options.nlp_solver_max_iter = 200
+    ocp.solver_options.nlp_solver_max_iter = 500
 
     # *** SOLVERS CREATION ***
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
