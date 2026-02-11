@@ -36,6 +36,10 @@ class Params:
                            5e1, 5e1, 5e1])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
         self.N = 100
+        
+        # *** REPULSIVE FIELD PARAMETERS ***
+        self.repulsive_gain = 1e3  # Weight of the repulsive cost
+        self.repulsive_influence_distance = 1.0  # Distance at which repulsive field activates
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
@@ -51,8 +55,8 @@ class Params:
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            #{"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            #{"center": np.array([0.0, 0.1, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
@@ -60,11 +64,6 @@ class Params:
         self.xlim = [-3.0, 3.0]
         self.ylim = [-3.0, 3.0] 
         self.zlim = [-2.0, 4.0]
-
-        # *** REPULSIVE FIELD PARAMETERS ***
-        self.repulsive_gain = 1e2  # Weight of the repulsive cost
-        self.repulsive_influence_distance = 1.0  # Distance at which repulsive field activates
-
 
 # =========================================================
 # MODEL GENERATION
@@ -248,6 +247,7 @@ class SthModel:
                 # Smooth repulsive cost
                 penetration = activation_distance - dist_to_center
                 rep_cost += params.repulsive_gain * ca.fmax(0, penetration)**2
+
 
         # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
@@ -468,9 +468,9 @@ def run_mpc(model, params):
     ocp.solver_options.integrator_type = "ERK"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-    ocp.solver_options.nlp_solver_type = "SQP_RTI" 
+    ocp.solver_options.nlp_solver_type = "SQP" 
 
-    ocp.solver_options.nlp_solver_max_iter = 200
+    ocp.solver_options.nlp_solver_max_iter = 20
 
     # *** SOLVERS CREATION ***
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
