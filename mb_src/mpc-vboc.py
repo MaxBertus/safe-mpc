@@ -2,6 +2,7 @@ import numpy as np
 import casadi as ca
 from casadi import MX, vertcat, horzcat, sin, cos, tan, cross, fmin, fmax
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
+from safe_mpc import ocp
 from utils.plotter import plotter
 import os
 import pickle
@@ -36,16 +37,13 @@ class Params:
                            5e1, 5e1, 5e1])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
         self.N = 100
-        
-        # *** REPULSIVE FIELD PARAMETERS ***
-        self.repulsive_gain = 1e3  # Weight of the repulsive cost
-        self.repulsive_influence_distance = 1.0  # Distance at which repulsive field activates
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
         self.dt = 0.02
         self.dtSim = 0.0001
         self.nsub = int( self.dt / self.dtSim )  # Number of simulation steps for each control steps
+        self.T = int(self.SimDuration / self.dt)
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
@@ -55,7 +53,7 @@ class Params:
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([0.0, 0.1, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            #{"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
             {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
@@ -203,69 +201,12 @@ class SthModel:
         self.u_min = np.zeros(self.nu)
         self.u_max = np.ones(self.nu)
 
-        # *** REPULSIVE COST (SOFT) ***
-        rep_cost = 0
-        
-        for obs in params.obstacles:
-            if obs["type"] == "sphere":
-                # For sphere obstacles, use direct distance
-                c = obs["center"]
-                r = obs["radius"]
-                
-                # Distance from drone center to obstacle center
-                dist_to_center = ca.sqrt((p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2)
-                
-                # Safety sphere radius (obstacle + drone radius)
-                safety_radius = r + params.maxRad
-                
-                # Repulsive potential: activate when distance < safety_radius + influence_distance
-                activation_distance = safety_radius + params.repulsive_influence_distance
-                
-                # Smooth repulsive cost that increases as we get closer
-                # Cost is 0 when dist > activation_distance
-                # Cost increases as dist approaches safety_radius
-                penetration = activation_distance - dist_to_center
-                rep_cost += params.repulsive_gain * ca.fmax(0, penetration)**2
-                
-            elif obs["type"] == "box":
-                # For box obstacles, compute circumscribed sphere
-                c = obs["center"]
-                d = obs["dimensions"]
-                
-                # Radius of circumscribed sphere (half diagonal of the box)
-                sphere_radius = ca.norm_2(d) / 2.0
-                
-                # Distance from drone center to box center
-                dist_to_center = ca.sqrt((p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2)
-                
-                # Safety sphere radius (circumscribed sphere + drone radius)
-                safety_radius = sphere_radius + params.maxRad
-                
-                # Repulsive potential with same logic as sphere
-                activation_distance = safety_radius + params.repulsive_influence_distance
-                
-                # Smooth repulsive cost
-                penetration = activation_distance - dist_to_center
-                rep_cost += params.repulsive_gain * ca.fmax(0, penetration)**2
-
-
         # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
         model.name = params.robot_name
         model.x = x
         model.u = u
         model.f_expl_expr = f_expl
-
-        model.cost_expr_ext_cost = (
-            (x - params.x_ref).T @ params.Q @ (x - params.x_ref)
-            + u.T @ params.R @ u
-            + rep_cost
-        )
-
-        model.cost_expr_ext_cost_e = (
-            (x - params.x_ref).T @ params.Q @ (x - params.x_ref)
-            + rep_cost
-        )
 
         self.amodel = model
 
@@ -360,9 +301,6 @@ def rollback_guess(solver, model, params, x_current):
         x_guess=x_guess
     )
 
-    # *** RETURN FIRST CONTROL INPUT ***
-    return u_sol[0]
-
 # =========================================================
 # DYNAMICS SIMULATION
 # =========================================================
@@ -384,12 +322,7 @@ def dynamicsSim(sim_solver, x, u, nsub):
 
     return x
 
-# =========================================================
-# MPC + SIMULATION
-# =========================================================
-def run_mpc(model, params):
-    '''Compute, apply and simulate MPC control.'''
-    
+def define_ocp(model, params):
     # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
     ny = nx + nu
@@ -401,8 +334,8 @@ def run_mpc(model, params):
     ocp.dims.N = params.N
     ocp.solver_options.tf = params.N * params.dt
 
-    ocp.cost.cost_type = "EXTERNAL"
-    ocp.cost.cost_type_e = "EXTERNAL"
+    ocp.cost.cost_type = "LINEAR_LS"
+    ocp.cost.cost_type_e = "LINEAR_LS"
 
     # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
@@ -439,6 +372,8 @@ def run_mpc(model, params):
     ocp.constraints.lbu = model.u_min
     ocp.constraints.ubu = model.u_max
     ocp.constraints.idxbu = np.arange(nu)
+
+    # Initial state constraint
     ocp.constraints.x0 = np.zeros(nx)  
     
     # State
@@ -470,14 +405,133 @@ def run_mpc(model, params):
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP" 
 
-    ocp.solver_options.nlp_solver_max_iter = 20
+    ocp.solver_options.nlp_solver_max_iter = 500
+
+    return ocp
+
+def define_ocpSafeAbort(model, params):
+    # *** PROBLEM DIMENSIONS DEFINITION ***
+    nx, nu = model.nx, model.nu
+    ny = nu
+
+    # *** OCP OBJECT CREATION ***
+    ocp = AcadosOcp()
+    ocp.model = model.amodel
+    ocp.dims.N = params.N
+    ocp.solver_options.tf = params.N * params.dt
+
+    ocp.cost.cost_type = "LINEAR_LS"
+    ocp.cost.cost_type_e = "LINEAR_LS"
+
+    # *** COST FUNCTION DEFINITION ***
+    Vx = np.zeros((ny, nx))
+    Vu = np.eye(nu)
+
+    ocp.cost.Vx = Vx
+    ocp.cost.Vu = Vu
+    ocp.cost.Vx_e = np.zeros((nx, nx))
+
+    R = params.R
+    ocp.cost.W = R
+    ocp.cost.W_e = np.zeros((nx, nx)) 
+
+    if params.use_u_ref_hovering:
+        u_ref = np.linalg.pinv(model.R(params.x_ref).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+    else:
+        u_ref = np.zeros(nu)
+
+    ocp.cost.yref = u_ref
+    ocp.cost.yref_e = np.zeros(nx)
+
+    # *** CONSTRAINTS DEFINITION ***
+    # Input
+    ocp.constraints.constr_type = "BGH"
+
+    ocp.constraints.lbu = model.u_min
+    ocp.constraints.ubu = model.u_max
+    ocp.constraints.idxbu = np.arange(nu)
+    
+    # Initial state constraint
+    ocp.constraints.x0 = np.zeros(nx)  
+    
+    # State
+    idx_pos = np.arange(0, 3)     # positions
+    idx_vel = np.arange(6, 12)    # velocities
+
+    # position bounds (only if active)
+    if params.state_constraint_active:
+
+        lb_pos = np.array([
+            params.xlim[0] + params.maxRad,
+            params.ylim[0] + params.maxRad,
+            params.zlim[0] + params.maxRad
+        ])
+
+        ub_pos = np.array([
+            params.xlim[1] - params.maxRad,
+            params.ylim[1] - params.maxRad,
+            params.zlim[1] - params.maxRad
+        ])
+
+        ocp.constraints.lbx = lb_pos
+        ocp.constraints.ubx = ub_pos
+        ocp.constraints.idxbx = idx_pos
+
+        # velocities must be zero
+        lb_vel = np.zeros(6)
+        ub_vel = np.zeros(6)
+
+        # concatenate
+        ocp.constraints.idxbx_e = np.concatenate((idx_pos, idx_vel))
+        ocp.constraints.lbx_e = np.concatenate((lb_pos, lb_vel))
+        ocp.constraints.ubx_e = np.concatenate((ub_pos, ub_vel))
+
+    else:
+        # only velocity constraint
+        ocp.constraints.idxbx_e = idx_vel
+        ocp.constraints.lbx_e = np.zeros(6)
+        ocp.constraints.ubx_e = np.zeros(6)
+
+    # Obstacles 
+    ocp.model.con_h_expr_0 = model.h_expr
+    ocp.constraints.lh_0 = model.h_min
+    ocp.constraints.uh_0 = model.h_max
+
+    ocp.model.con_h_expr = model.h_expr
+    ocp.constraints.lh = model.h_min
+    ocp.constraints.uh = model.h_max
+
+    ocp.model.con_h_expr_e = model.h_expr
+    ocp.constraints.lh_e = model.h_min
+    ocp.constraints.uh_e = model.h_max
+
+    # *** SOLVER PARAMETERS DEFINITION ***
+    ocp.solver_options.integrator_type = "ERK"
+    ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
+    ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
+    ocp.solver_options.nlp_solver_type = "SQP" 
+
+    ocp.solver_options.nlp_solver_max_iter = 500
+
+    return ocp
+
+# =========================================================
+# MPC + SIMULATION
+# =========================================================
+def run_mpc(model, params):
+    '''Compute, apply and simulate MPC control.'''
+    
+    # *** OCPs DEFINITION ***
+    ocp = define_ocp(model, params)
+    ocpSafeAbort = define_ocpSafeAbort(model, params)
 
     # *** SOLVERS CREATION ***
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
+    solverSafeAbort = AcadosOcpSolver(ocpSafeAbort, json_file="acados_ocp_safe_abort.json")
     sim_solver = create_acados_sim(model, params)
 
     # *** VARIABLES DEFINITION ***
-    x = np.zeros(nx)
+    x = np.zeros(model.nx)
     xg = [x.copy()]
     ug = []
 
@@ -495,15 +549,41 @@ def run_mpc(model, params):
     )
 
     # *** MPC LOOP ***
+
+    fails = 0 
+
     for ist in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
-
+       
         solver.solve_for_x0(x, False, False)
+        x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
+        u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
 
-        u = rollback_guess(solver, model, params, x)
-        x = dynamicsSim(sim_solver, x, u, params.nsub)
+        feas = solver.get_status()
 
-        ug.append(u)
-        xg.append(x.copy())
+        if feas == 0:
+            fails = 0
+        else:
+            if fails == 0:
+                print("MPC infeasibility detected.")
+                solverSafeAbort.solve_for_x0( ??? , False, False)
+            elif fails == params.N-1:
+                # FOLLOW SAFE ABORT 
+                ??? 
+                print("MPC infeasibility persists. Following safe abort strategy.")
+            
+            fails = fails + 1
+            x_sol = x_prev.copy()
+            u_sol = u_prev.copy()
+                   
+        x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
+        rollback_guess(solver, model, params, x_next)
+
+        x = x_next.copy()
+        x_prev = x_sol.copy()
+        u_prev = u_sol.copy()
+
+        ug.append(u_sol[0])
+        xg.append(x_next.copy())
 
     # *** DATA SAVING ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")

@@ -299,9 +299,6 @@ def rollback_guess(solver, model, params, x_current):
         x_guess=x_guess
     )
 
-    # *** RETURN FIRST CONTROL INPUT ***
-    return u_sol[0]
-
 # =========================================================
 # DYNAMICS SIMULATION
 # =========================================================
@@ -437,9 +434,11 @@ def run_mpc(model, params):
     for ist in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
 
         solver.solve_for_x0(x, False, False)
+        u = solver.get(0, "u")
 
-        u = rollback_guess(solver, model, params, x)
         x = dynamicsSim(sim_solver, x, u, params.nsub)
+        
+        rollback_guess(solver, model, params, x)
 
         ug.append(u)
         xg.append(x.copy())
