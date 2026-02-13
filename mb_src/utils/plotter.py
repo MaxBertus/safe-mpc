@@ -24,8 +24,8 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     # Extract first simulation of batch
     if xHistory.ndim == 3:
-        N = xHistory.shape[1] - 1
-        xHistory = xHistory[-1, :, :]   # (N+1, 12)
+        T = xHistory.shape[1] - 1
+        xHistory = xHistory[-1, :T, :]   # (N+1, 12)
         uHistory = uHistory[-1, :, :]   # (N, 6)
     else:
         N = xHistory.shape[0] - 1
@@ -33,7 +33,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         uHistory = uHistory[:, :]       # (N, 6)
 
     # Define time array
-    time = params.time
+    time = np.arange(0, N * params.dt, params.dt)
 
     # Define state and input references
     x_ref = params.x_ref

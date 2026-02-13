@@ -551,8 +551,9 @@ def run_mpc(model, params):
     # *** MPC LOOP ***
 
     fails = 0 
+    follow_safe_abort = False
 
-    for ist in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
+    for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
        
         solver.solve_for_x0(x, False, False)
         x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
@@ -565,12 +566,12 @@ def run_mpc(model, params):
         else:
             if fails == 0:
                 print("MPC infeasibility detected.")
-                solverSafeAbort.solve_for_x0( ??? , False, False)
+                solverSafeAbort.solve_for_x0( x_prev[params.N-1] , False, False) # Why N-1?
             elif fails == params.N-1:
-                # FOLLOW SAFE ABORT 
-                ??? 
                 print("MPC infeasibility persists. Following safe abort strategy.")
-            
+                follow_safe_abort = True
+                break
+                
             fails = fails + 1
             x_sol = x_prev.copy()
             u_sol = u_prev.copy()
@@ -585,6 +586,17 @@ def run_mpc(model, params):
         ug.append(u_sol[0])
         xg.append(x_next.copy())
 
+    if follow_safe_abort:
+
+        u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.N)])
+        
+        for j in range(0, params.N):
+            x_next = dynamicsSim(sim_solver, x, u_sol[j], params.nsub)
+
+            x = x_next.copy()
+            ug.append(u_sol[j])
+            xg.append(x_next.copy())
+        
     # *** DATA SAVING ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
     data = {
