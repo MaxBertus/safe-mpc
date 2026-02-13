@@ -79,7 +79,6 @@ def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8,
             
     return centers, half_dims
 
-
 def discretize_box_surface(center, half_dims, step):
     """
     Discretize the surface of an axis-aligned box.

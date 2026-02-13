@@ -354,7 +354,7 @@ def dynamicsSim(sim_solver, x, u, nsub):
 # OCP DEFINITION
 # =========================================================
 
-def define_ocp(model, params, safe_set):
+def define_ocp(model, params, safe_set, x0):
     # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
     ny = nx + nu
@@ -406,7 +406,7 @@ def define_ocp(model, params, safe_set):
     ocp.constraints.idxbu = np.arange(nu)
 
     # Initial state constraint
-    ocp.constraints.x0 = np.zeros(nx)  
+    ocp.constraints.x0 = x0
     
     # State
     if params.state_constraint_active:
@@ -662,80 +662,90 @@ def run_mpc(model, params):
     sim_solver = create_acados_sim(model, params)
 
     # *** VARIABLES DEFINITION ***
-    x = np.zeros(model.nx)
-    xg = [x.copy()]
-    ug = []
+    x0_list = np.zeros((1, model.nx))  # List of initial states (can be modified to include multiple initial conditions)
 
-    x_prev = x
-    u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
-    
-    boxes = np.zeros(6) # Placeholder for box dimensions, to be updated if needed
+    xg_all = []
+    ug_all = []
 
-    # *** FIRST INITIALIZATION ***
-    initialize_guess(
-        solver,
-        model,
-        params,
-        x,
-        u_guess=u_prev,
-        x_guess=x_prev,
-        p_guess=boxes
-    )
+    for x0 in x0_list:
+        x = x0
+        x = np.zeros(model.nx)  # Initial state (can be modified as needed)
+        xg = [x.copy()]
+        ug = []
 
-    # *** MPC LOOP ***
-
-    fails = 0 
-    follow_safe_abort = False
-
-    for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
-       
-        solver.solve_for_x0(x, False, False)
-        x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
-        u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
-
-        feas = solver.get_status()
-
-        if feas == 0:
-            fails = 0
-        else:
-            if fails == 0:
-                print("MPC infeasibility detected.")
-                solverSafeAbort.solve_for_x0( x_prev[params.N-1] , False, False) # Why N-1?
-            elif fails == params.N-1:
-                print("MPC infeasibility persists. Following safe abort strategy.")
-                follow_safe_abort = True
-                break
-                
-            fails = fails + 1
-            x_sol = x_prev.copy()
-            u_sol = u_prev.copy()
-                   
-        x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
-        rollback_guess(solver, model, params, x_next, p_guess=boxes)
-
-        x = x_next.copy()
-        x_prev = x_sol.copy()
-        u_prev = u_sol.copy()
-
-        ug.append(u_sol[0])
-        xg.append(x_next.copy())
-
-    if follow_safe_abort:
-
-        u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.N)])
+        x_prev = x
+        u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
         
-        for j in range(0, params.N):
-            x_next = dynamicsSim(sim_solver, x, u_sol[j], params.nsub)
+        boxes = np.zeros(6) # Placeholder for box dimensions, to be updated if needed
+
+        # *** FIRST INITIALIZATION ***
+        initialize_guess(
+            solver,
+            model,
+            params,
+            x,
+            u_guess=u_prev,
+            x_guess=x_prev,
+            p_guess=boxes
+        )
+
+        # *** MPC LOOP ***
+
+        fails = 0 
+        follow_safe_abort = False
+
+        for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
+        
+            solver.solve_for_x0(x, False, False)
+            x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
+            u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
+
+            feas = solver.get_status()
+
+            if feas == 0:
+                fails = 0
+            else:
+                if fails == 0:
+                    print("MPC infeasibility detected.")
+                    solverSafeAbort.solve_for_x0( x_prev[params.N-1] , False, False) # Why N-1?
+                elif fails == params.N-1:
+                    print("MPC infeasibility persists. Following safe abort strategy.")
+                    follow_safe_abort = True
+                    break
+                    
+                fails = fails + 1
+                x_sol = x_prev.copy()
+                u_sol = u_prev.copy()
+                    
+            x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
+            rollback_guess(solver, model, params, x_next, p_guess=boxes)
 
             x = x_next.copy()
-            ug.append(u_sol[j])
+            x_prev = x_sol.copy()
+            u_prev = u_sol.copy()
+
+            ug.append(u_sol[0])
             xg.append(x_next.copy())
+
+        if follow_safe_abort:
+
+            u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.N)])
+            
+            for j in range(0, params.N):
+                x_next = dynamicsSim(sim_solver, x, u_sol[j], params.nsub)
+
+                x = x_next.copy()
+                ug.append(u_sol[j])
+                xg.append(x_next.copy())
         
+        xg_all.append(np.asarray(xg))
+        ug_all.append(np.asarray(ug))
+
     # *** DATA SAVING ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
     data = {
-        "xg": np.asarray(xg),
-        "ug": np.asarray(ug)
+        "xg": xg_all,
+        "ug": ug_all
     }
 
     with open(traj_path, "wb") as f:

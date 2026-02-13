@@ -17,20 +17,21 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     with open(file_path, "rb") as f:
         data = pickle.load(f)
 
-    xHistory = data["xg"]        # (Ntraj, N+1, 12)
-    uHistory = data["ug"]        # (Ntraj, N, 6)
+    if isinstance(data["xg"], list):
+        xCollection = data["xg"]        # (Ntraj, Nvar+1, 12)
+        uCollection = data["ug"] 
 
-    print(f"Loaded data from {file_path}")
+        xHistory = xCollection[0]      # (N, 12)
+        uHistory = uCollection[0]      # (N-1, 6)
+    elif isinstance(data["xg"], np.ndarray):
+        xHistory = data["xg"][:-1, :]  # (N, 12)
+        uHistory = data["ug"][:, :]    # (N-1, 6)
 
-    # Extract first simulation of batch
-    if xHistory.ndim == 3:
-        T = xHistory.shape[1] - 1
-        xHistory = xHistory[-1, :T, :]   # (N+1, 12)
-        uHistory = uHistory[-1, :, :]   # (N, 6)
-    else:
-        N = xHistory.shape[0] - 1
-        xHistory = xHistory[:N, :]      # (N, 12)
-        uHistory = uHistory[:, :]       # (N, 6)
+    print(f"Loaded data from {file_path}") 
+
+    N = xHistory.shape[0] - 1
+    xHistory = xHistory[:N, :]      # (N, 12)
+    uHistory = uHistory[:, :]       # (N, 6)
 
     # Define time array
     time = np.arange(0, N * params.dt, params.dt)
