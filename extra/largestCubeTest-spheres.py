@@ -52,7 +52,7 @@ def generate_random_spheres_outside_box(N, inner_half=0.5, outer_half=2.0, radiu
 if __name__ == "__main__":
 
     counter = 0
-    for r in range(1, 50):
+    for r in range(1, 2):
 
         np.random.seed(r)
 
@@ -68,7 +68,7 @@ if __name__ == "__main__":
         Q = np.vstack([Q, np.zeros((1,3))])
         R = np.hstack([R, 0.0])
 
-        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check = min_cube_select(Q, R)
+        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check, _ = min_cube_select(Q, R)
 
         if exitflag <= 0:
             print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check}")
@@ -78,10 +78,10 @@ if __name__ == "__main__":
             print(f"Iteration {r}: Cube found with volume {(x_max-x_min)*(y_max-y_min)*(z_max-z_min)} and check={check}")
 
         # Visualize
-        # plot_cube(
-        #     x_min, x_max,
-        #     y_min, y_max,
-        #     z_min, z_max,
-        #     Q=Q, R=R,
-        #     plotter=r
-        # )
+        plot_cube(
+            x_min, x_max,
+            y_min, y_max,
+            z_min, z_max,
+            Q=Q, R=R,
+            plotter=r
+        )

@@ -1,5 +1,9 @@
 import numpy as np
 import casadi as ca
+import torch
+import torch.nn as nn
+import copy
+import l4casadi as l4c
 from casadi import MX, vertcat, horzcat, sin, cos, tan, cross, fmin, fmax
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
 from safe_mpc import ocp
@@ -62,6 +66,18 @@ class Params:
         self.xlim = [-3.0, 3.0]
         self.ylim = [-3.0, 3.0] 
         self.zlim = [-2.0, 4.0]
+
+        # *** NEURAL NETWORK PARAMETERS ***
+        self.input_size = 15 # 6 box dimensions + 3 orientations + 3 linear velocities + 3 angular velocities = 15
+        self.hidden_size = 512
+        self.output_size = 1
+        self.number_hidden = 3
+        self.act_fun = torch.nn.GELU(approximate='tanh')
+        self.net_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"nn/sth_{self.act_fun}.pt")
+        self.build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nn")
+        self.eps = 1e-6
+        self.alpha = 5
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # =========================================================
 # MODEL GENERATION
@@ -201,25 +217,30 @@ class SthModel:
         self.u_min = np.zeros(self.nu)
         self.u_max = np.ones(self.nu)
 
+        # *** PARAMETERS ***
+        box = ca.MX.sym("b", 6)
+
         # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
         model.name = params.robot_name
         model.x = x
         model.u = u
         model.f_expl_expr = f_expl
+        model.p = box
 
         self.amodel = model
 
 # =========================================================
 # INITIAL GUESS
 # =========================================================
-def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
+def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None, p_guess=None):
     """
     Initialize the OCP with a state and control guess.
 
     x0      : initial state (nx,)
     u_guess : control guess (nu,) or (N, nu)
     x_guess : state guess (nx,) or (N+1, nx)
+    p_guess : parameter guess (np.ndarray of shape (n_p,))
     """
 
     # *** DIMENSIONS DEFINITION ***
@@ -233,6 +254,9 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
 
     if x_guess is None:
         x_guess = x0.copy()
+
+    if p_guess is None:
+        p_guess = np.zeros(model.p.shape[0])
 
     # *** CUSTOM GUESSES ASSIGNMENT ***
     # Intermidiate steps
@@ -253,6 +277,9 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None):
     else:
         solver.set(N, "x", x_guess[N])
 
+    for k in range(N+1):
+        solver.set(k, "p", p_guess)
+
 # =========================================================
 # CREATE SIMULATOR
 # =========================================================
@@ -271,7 +298,7 @@ def create_acados_sim(model, params):
 # =========================================================
 # ROLLBACK GUESS
 # =========================================================
-def rollback_guess(solver, model, params, x_current):
+def rollback_guess(solver, model, params, x_current, p_current=None):
     """
     Shift MPC solution and reinitialize the solver with the new guess.
 
@@ -298,7 +325,8 @@ def rollback_guess(solver, model, params, x_current):
         params,
         x_current,
         u_guess=u_guess,
-        x_guess=x_guess
+        x_guess=x_guess,
+        p_guess=p_current
     )
 
 # =========================================================
@@ -322,7 +350,11 @@ def dynamicsSim(sim_solver, x, u, nsub):
 
     return x
 
-def define_ocp(model, params):
+# =========================================================
+# OCP DEFINITION
+# =========================================================
+
+def define_ocp(model, params, safe_set):
     # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
     ny = nx + nu
@@ -398,6 +430,14 @@ def define_ocp(model, params):
     ocp.model.con_h_expr_e = model.h_expr
     ocp.constraints.lh_e = model.h_min
     ocp.constraints.uh_e = model.h_max
+
+    # Neural network safe set constraint
+    nn_expr = safe_set.nn_func(model.amodel.x, model.amodel.p)
+
+    ocp.model.con_h_expr_e = vertcat(model.h_expr, nn_expr)
+
+    ocp.constraints.lh_e = np.concatenate([model.h_min, [0.]])
+    ocp.constraints.uh_e = np.concatenate([model.h_max, [1e6]])
 
     # *** SOLVER PARAMETERS DEFINITION ***
     ocp.solver_options.integrator_type = "ERK"
@@ -516,13 +556,104 @@ def define_ocpSafeAbort(model, params):
     return ocp
 
 # =========================================================
+# NEURAL NETWORK DEFINITION
+# =========================================================
+
+class NeuralNetwork(nn.Module):
+    """ A simple feedforward neural network. """
+    def __init__(self, input_size, hidden_size, output_size, number_hidden, activation=nn.ReLU(), ub=None):
+        super().__init__()
+        layers=[]
+
+        # Input layer
+        layers.append(nn.Linear(input_size, hidden_size))
+        layers.append(activation)
+        
+        # Hidden layers
+        for _ in range(number_hidden):
+            layers.append(nn.Linear(hidden_size, hidden_size))
+            layers.append(activation)
+        
+        # Output layer
+        layers.append(nn.Linear(hidden_size, output_size))
+        layers.append(activation)
+
+        self.linear_stack = nn.Sequential(*layers)
+
+        self.ub = ub if ub is not None else 1
+        self.initialize_weights()
+
+        #self.input_size = input_size
+
+    def forward(self, x):
+        #out = self.linear_stack(x[:,:self.input_size])* self.ub 
+        out = self.linear_stack(x) * self.ub 
+
+        return out #(out + 1) * self.ub / 2
+    
+    def initialize_weights(self):
+        for layer in self.linear_stack:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_normal_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
+# =========================================================
+# SAFE SET DEFINITION
+# =========================================================
+
+class NetSafeSet():
+    def __init__(self,model,params):
+        self.constraints = []
+        self.constraints_fun = []
+        self.bounds = []
+
+        npos = 3
+        nori = 3
+        nvel = 3
+        nang_vel = 3
+        nbox = 6
+        nbori = nbox + nori
+
+        nn_data = torch.load(params.net_path,
+                             map_location=params.device)
+        model_net = NeuralNetwork(params.input_size, params.hidden_size, params.output_size, params.number_hidden, params.act_fun, 1).to(params.device)
+        model_net.load_state_dict(nn_data['model'])
+
+        x_cp = model.x
+        p_cp = model.p
+
+        # Standardize box dimensions
+        box = (p_cp - nn_data['mean'][:nbox]) / nn_data['std'][:nbox]
+
+        # Standardize initial orientation
+        orient = (x_cp[npos:npos+nori] - nn_data['mean'][nbox:nbori]) / nn_data['std'][nbox:nbori]
+
+        # Normalize velocities            
+        vel_norm = ca.norm_2(x_cp[npos+nori:])
+        vel_dir = x_cp[npos+nori:] / (vel_norm + params.eps) 
+
+        state = ca.vertcat(box, orient, vel_dir)
+
+        self.l4c_model = l4c.L4CasADi(model_net,
+                                      device=params.device,
+                                      name=f'{params.robot_name}_model',
+                                      build_dir=params.build_dir)
+    
+        nn_model = self.l4c_model(state) * (100 - params.alpha) / 100 - vel_norm
+       
+        self.nn_func = ca.Function('nn_func', [model.x, model.p], [nn_model])
+
+# =========================================================
 # MPC + SIMULATION
 # =========================================================
 def run_mpc(model, params):
     '''Compute, apply and simulate MPC control.'''
     
+    # Define safe set
+    safe_set = NetSafeSet(model, params)
+
     # *** OCPs DEFINITION ***
-    ocp = define_ocp(model, params)
+    ocp = define_ocp(model, params, safe_set)
     ocpSafeAbort = define_ocpSafeAbort(model, params)
 
     # *** SOLVERS CREATION ***
@@ -538,6 +669,8 @@ def run_mpc(model, params):
     x_prev = x
     u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
     
+    boxes = np.zeros(6) # Placeholder for box dimensions, to be updated if needed
+
     # *** FIRST INITIALIZATION ***
     initialize_guess(
         solver,
@@ -545,7 +678,8 @@ def run_mpc(model, params):
         params,
         x,
         u_guess=u_prev,
-        x_guess=x_prev
+        x_guess=x_prev,
+        p_guess=boxes
     )
 
     # *** MPC LOOP ***
@@ -577,7 +711,7 @@ def run_mpc(model, params):
             u_sol = u_prev.copy()
                    
         x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
-        rollback_guess(solver, model, params, x_next)
+        rollback_guess(solver, model, params, x_next, p_guess=boxes)
 
         x = x_next.copy()
         x_prev = x_sol.copy()

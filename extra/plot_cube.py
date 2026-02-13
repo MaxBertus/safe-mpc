@@ -54,7 +54,7 @@ def draw_boxes(ax, centers, half_dims, color='blue', alpha=0.3):
 
 
 def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max, 
-              Q=None, R=None, centers=None, half_dims=None, points=None, plotter=None):
+              Q=None, R=None, centers=None, half_dims=None, points=None, plotter=None, goal_point=None):
     """
     Plot the optimal 3D box with obstacles (spheres or boxes) and origin.
     
@@ -99,6 +99,11 @@ def plot_cube(x_min, x_max, y_min, y_max, z_min, z_max,
     y_sphere = uav_radius * np.sin(u) * np.sin(v)
     z_sphere = uav_radius * np.cos(v)
     ax.plot_surface(x_sphere, y_sphere, z_sphere, color='black', alpha=0.5)
+
+    # Draw goal point
+    if goal_point is not None:
+        ax.scatter(goal_point[0], goal_point[1], goal_point[2], s=20, c='green', edgecolors='white')
+        ax.text(goal_point[0], goal_point[1], goal_point[2]+0.1, "Goal", color='green', fontsize=8, ha='center', fontweight='bold')
 
     # Draw optimal box
     draw_box(ax, x_min, x_max, y_min, y_max, z_min, z_max, color='red', alpha=0.1, linestyle='--')

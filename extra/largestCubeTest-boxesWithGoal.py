@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from minCubeSelect import min_cube_select
 from plot_cube import plot_cube
 
-def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8, seed=None):
+def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8, seed=None, goal_point=None):
     """
     Generate random axis-aligned boxes outside a small cube and inside a large cube.
     
@@ -19,6 +19,8 @@ def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8,
         Maximum half-dimension of boxes.
     seed : int
         Random seed.
+    goal_point : ndarray, shape (3,), optional
+        Goal point that must not be inside any box.
         
     Returns
     -------
@@ -32,26 +34,51 @@ def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8,
     half_dims = np.zeros((n_boxes, 3))
     
     for i in range(n_boxes):
-        for j in range(3):  # x, y, z
-            # Half-dimension random
-            hd = np.random.uniform(0.05, max_size)
-            half_dims[i, j] = hd
+        max_attempts = 1000
+        attempt = 0
+        valid_box = False
+        
+        while not valid_box and attempt < max_attempts:
+            attempt += 1
+            temp_center = np.zeros(3)
+            temp_half_dims = np.zeros(3)
             
-            # Decide whether to place box below or above inner cube
-            if np.random.rand() < 0.5:
-                # Below inner cube
-                min_c = -outer_half + hd
-                max_c = -inner_half - hd
+            for j in range(3):  # x, y, z
+                # Half-dimension random
+                hd = np.random.uniform(0.05, max_size)
+                temp_half_dims[j] = hd
+                
+                # Decide whether to place box below or above inner cube
+                if np.random.rand() < 0.5:
+                    # Below inner cube
+                    min_c = -outer_half + hd
+                    max_c = -inner_half - hd
+                else:
+                    # Above inner cube
+                    min_c = inner_half + hd
+                    max_c = outer_half - hd
+                
+                temp_center[j] = np.random.uniform(min_c, max_c)
+            
+            # Check if goal_point is inside this box
+            if goal_point is not None:
+                inside = np.all(
+                    (goal_point >= temp_center - temp_half_dims) &
+                    (goal_point <= temp_center + temp_half_dims)
+                )
+                valid_box = not inside
             else:
-                # Above inner cube
-                min_c = inner_half + hd
-                max_c = outer_half - hd
+                valid_box = True
             
-            centers[i, j] = np.random.uniform(min_c, max_c)
+            if valid_box:
+                centers[i] = temp_center
+                half_dims[i] = temp_half_dims
+        
+        if attempt >= max_attempts:
+            print(f"Warning: Could not place box {i} without overlapping goal point after {max_attempts} attempts")
             
     return centers, half_dims
 
-import numpy as np
 
 def discretize_box_surface(center, half_dims, step):
     """
@@ -142,14 +169,17 @@ def discretize_boxes_surfaces(centers, half_dims, step):
 if __name__ == "__main__":
 
     counter = 0
-    for r in range(1, 500):
+    for r in range(1, 10):
 
-        Q, D = generate_random_boxes(5, seed=r)
+        goal_point = np.array([0.0, -1.0, -1.0])
+        
+        # Generate boxes that don't contain the goal point
+        Q, D = generate_random_boxes(5, seed=r, goal_point=goal_point)
 
         points = discretize_boxes_surfaces(Q, D, 1.0)
 
         # Solve optimization problem
-        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check, _ = min_cube_select(points)
+        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check, goal_incl = min_cube_select(points, goal_point=goal_point)
 
         # if exitflag <= 0:
         #     print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check}")
@@ -159,16 +189,20 @@ if __name__ == "__main__":
         #     print(f"Iteration {r}: Cube found with volume {(x_max-x_min)*(y_max-y_min)*(z_max-z_min)} and check={check}")
 
         if not check:
-            print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check}")
+            print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check} and goal_incl={goal_incl}")
             counter += 1
+            continue
+        else:
+            print(f"Iteration {r}: Cube found with volume {(x_max-x_min)*(y_max-y_min)*(z_max-z_min)} and goal included={goal_incl}")
 
         # Visualize
-        # plot_cube(
-        #     x_min, x_max,
-        #     y_min, y_max,
-        #     z_min, z_max,
-        #     centers=Q,
-        #     half_dims=D,
-        #     points=points,
-        #     plotter=r
-        # )
+        plot_cube(
+            x_min, x_max,
+            y_min, y_max,
+            z_min, z_max,
+            centers=Q,
+            half_dims=D,
+            points=points,
+            plotter=r,
+            goal_point=goal_point
+        )

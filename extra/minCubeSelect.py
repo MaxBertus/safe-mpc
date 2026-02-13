@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize
 
-def min_cube_select(Q, R=None):
+def min_cube_select(Q, R=None, goal_point=None):
     """
     Python equivalent of the MATLAB function minCubeSelect.
     
@@ -11,6 +11,8 @@ def min_cube_select(Q, R=None):
         Centers of the spheres.
     R : ndarray, shape (N,)
         Radii of the spheres.
+    goal_point : ndarray, shape (3,), optional
+        Point that must be included in the box.
     
     Returns
     -------
@@ -18,13 +20,29 @@ def min_cube_select(Q, R=None):
         Bounds of the optimal box.
     exitflag : int
         Optimization success flag (1 = success, 0 = failure).
+    all_outside : bool
+        Whether all spheres are outside the box.
+    goal_included : bool
+        Whether the goal point is included in the box (if provided).
     """
 
     if R is None:
         R = np.zeros(Q.shape[0])
 
-    # Initial guess (small box)
-    x0 = np.array([-0.5, 0.5, -0.5, 0.5, -0.5, 0.5])
+    # Initial guess adjusted to include goal point if provided
+    if goal_point is not None:
+        # Start with a box that includes the goal point
+        margin = 0.1
+        x0 = np.array([
+            min(-0.5, goal_point[0] - margin),
+            max(0.5, goal_point[0] + margin),
+            min(-0.5, goal_point[1] - margin),
+            max(0.5, goal_point[1] + margin),
+            min(-0.5, goal_point[2] - margin),
+            max(0.5, goal_point[2] + margin)
+        ])
+    else:
+        x0 = np.array([-0.5, 0.5, -0.5, 0.5, -0.5, 0.5])
 
     # Bounds (origin must be inside)
     bounds = [
@@ -39,12 +57,30 @@ def min_cube_select(Q, R=None):
     # Objective: maximize volume -> minimize negative volume
     def objective(x):
         return -box_volume(x)
+    
+    # Constraints list
+    constraints_list = []
 
     # Nonlinear inequality constraints (c(x) <= 0)
-    constraints = {
+    constraints_list.append({
         "type": "ineq",
         "fun": lambda x: -sphere_box_constraints(x, Q, R)
-    }
+    })
+
+    # Goal point constraint (if provided)
+    if goal_point is not None:
+        eps = 1e-6
+        constraints_list.append({
+            "type": "ineq",
+            "fun": lambda x: np.array([
+                goal_point[0] - x[0] - eps,  # goal_x >= xMin
+                x[1] - goal_point[0] - eps,  # goal_x <= xMax
+                goal_point[1] - x[2] - eps,  # goal_y >= yMin
+                x[3] - goal_point[1] - eps,  # goal_y <= yMax
+                goal_point[2] - x[4] - eps,  # goal_z >= zMin
+                x[5] - goal_point[2] - eps   # goal_z <= zMax
+            ])
+        })
 
     # Solve optimization
     result = minimize(
@@ -52,7 +88,8 @@ def min_cube_select(Q, R=None):
         x0,
         method="trust-constr",
         bounds=bounds,
-        constraints=constraints,
+        constraints=constraints_list,
+        options={"verbose": 0}
     )
 
     xOpt = result.x
@@ -70,11 +107,21 @@ def min_cube_select(Q, R=None):
 
     all_outside = not np.any(inside)
 
+    if goal_point is not None:
+        goal_included = (
+            (xOpt[0] <= goal_point[0] <= xOpt[1]) and
+            (xOpt[2] <= goal_point[1] <= xOpt[3]) and
+            (xOpt[4] <= goal_point[2] <= xOpt[5])
+        )
+    else:
+        goal_included = True
+
     return (
         xOpt[0], xOpt[1],
         xOpt[2], xOpt[3],
         xOpt[4], xOpt[5],
         exitflag, all_outside,
+        goal_included
     )
 
 def min_cube_select_boxes(Q, D):
