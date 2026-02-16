@@ -540,10 +540,8 @@ class NetSafeSet():
         x_cp = model.amodel.x
         p_cp = model.amodel.p
 
-
-
-
         # Standardize box dimensions
+        box = p_cp - x_cp[:npos]
         box = (p_cp - nn_data['mean'][:nbox]) / nn_data['std'][:nbox]
 
         # Standardize initial orientation
