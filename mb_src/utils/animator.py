@@ -170,7 +170,12 @@ def animator(pos, angles, params):
     ax.set_xlim(params.xlim)
     ax.set_ylim(params.ylim)
     ax.set_zlim(params.zlim)
-    ax.set_box_aspect([1, 1, 1])
+
+    # Calculate the actual dimensions for each axis
+    x_range = params.xlim[1] - params.xlim[0]
+    y_range = params.ylim[1] - params.ylim[0]
+    z_range = params.zlim[1] - params.zlim[0]
+
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")

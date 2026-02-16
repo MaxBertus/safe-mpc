@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from minCubeSelect import min_cube_select
 from plot_cube import plot_cube
 
-def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8, seed=None, goal_point=None):
+def generate_random_boxes(n_boxes, inner_half=0.6, outer_half=2.0, max_size=0.8, seed=None, goal_point=None):
     """
     Generate random axis-aligned boxes outside a small cube and inside a large cube.
     

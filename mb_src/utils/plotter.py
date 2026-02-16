@@ -24,7 +24,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         xHistory = xCollection[0]      # (N, 12)
         uHistory = uCollection[0]      # (N-1, 6)
     elif isinstance(data["xg"], np.ndarray):
-        xHistory = data["xg"][:-1, :]  # (N, 12)
+        xHistory = data["xg"][:, :]  # (N, 12)
         uHistory = data["ug"][:, :]    # (N-1, 6)
 
     print(f"Loaded data from {file_path}") 
@@ -35,7 +35,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     # Define time array
     time = np.arange(0, N * params.dt, params.dt)
-
+    
     # Define state and input references
     x_ref = params.x_ref
     if params.use_u_ref_hovering:

@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize
 
-def min_cube_select(Q, R=None, goal_point=None):
+def min_cube_select(Q=None, R=None, goal_point=None):
     """
     Python equivalent of the MATLAB function minCubeSelect.
     
@@ -51,7 +51,7 @@ def min_cube_select(Q, R=None, goal_point=None):
         (-2.0, 0.0),   # yMin
         (0.0, 2.0),    # yMax
         (-2.0, 0.0),   # zMin
-        (0.0, 1.0)     # zMax
+        (0.0, 2.0)     # zMax
     ]
 
     # Objective: maximize volume -> minimize negative volume
@@ -61,10 +61,16 @@ def min_cube_select(Q, R=None, goal_point=None):
     # Constraints list
     constraints_list = []
 
-    # Nonlinear inequality constraints (c(x) <= 0)
+    # Nonlinear inequality constraints (c(x) >= 0)
     constraints_list.append({
         "type": "ineq",
-        "fun": lambda x: -sphere_box_constraints(x, Q, R)
+        "fun": lambda x: sphere_box_constraints(x, Q, R)
+    })
+
+    # Nonlinear inequality constraints (c(x) >= 0)
+    constraints_list.append({
+        "type": "ineq",
+        "fun": lambda x: drone_occupancy(x)
     })
 
     # Goal point constraint (if provided)
@@ -211,8 +217,36 @@ def sphere_box_constraints(x, Q, R):
         dist2 = dx**2 + dy**2 + dz**2
 
         # inequality: r^2 - dist^2 <= 0
-        c[i] = r**2 - dist2 + 1e-3
+        c[i] = -r**2 + dist2 - 1e-3
 
+    return c
+
+def drone_occupancy(x):
+    """
+    Inequality constraints ensuring the box can contain a sphere
+    of radius 0.5 centered at the origin.
+    
+    Since xMin, yMin, zMin are always negative (from bounds),
+    we ensure they are <= -0.5, and xMax, yMax, zMax are >= 0.5.
+    
+    Returns c such that c >= 0 (for scipy 'ineq' constraint).
+    """
+    xMin, xMax, yMin, yMax, zMin, zMax = x
+    
+    drone_radius = 0.5
+    eps = 1e-6  # small tolerance for numerical stability
+    
+    # Since mins are negative: xMin <= -drone_radius means -xMin >= drone_radius
+    # Since maxs are positive: xMax >= drone_radius
+    c = np.array([
+        -xMin - drone_radius + eps,  # -xMin >= 0.5 (since xMin < 0)
+        xMax - drone_radius + eps,   # xMax >= 0.5
+        -yMin - drone_radius + eps,  # -yMin >= 0.5 (since yMin < 0)
+        yMax - drone_radius + eps,   # yMax >= 0.5
+        -zMin - drone_radius + eps,  # -zMin >= 0.5 (since zMin < 0)
+        zMax - drone_radius + eps    # zMax >= 0.5
+    ])
+    
     return c
 
 def box_box_constraints(x, centers, half_dims, eps=1e-4):

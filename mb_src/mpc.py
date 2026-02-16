@@ -35,7 +35,7 @@ class Params:
                            1e1, 1e1, 1e1,   # linear velocities 
                            5e1, 5e1, 5e1])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
-        self.N = 100
+        self.N = 50
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
@@ -45,14 +45,14 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.5, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            {"center": np.array([0.0, 0.0, 1.5]), "dimensions": np.array([1.0, 1.0, 0.2]), "type": "box"},
+            #{"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
@@ -435,6 +435,9 @@ def run_mpc(model, params):
 
         solver.solve_for_x0(x, False, False)
         u = solver.get(0, "u")
+
+        # Print status
+        status = solver.get_status()
 
         x = dynamicsSim(sim_solver, x, u, params.nsub)
         

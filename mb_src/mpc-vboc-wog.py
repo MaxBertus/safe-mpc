@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.optimize import minimize
 import casadi as ca
 import torch
 import torch.nn as nn
@@ -57,12 +58,11 @@ class Params:
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            # {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            # {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
         ]
         
         # Room dimensions
-        self.state_constraint_active = True
         self.xlim = [-3.0, 3.0]
         self.ylim = [-3.0, 3.0] 
         self.zlim = [-2.0, 4.0]
@@ -159,66 +159,26 @@ class SthModel:
 
         self.f_expl_func = ca.Function("f_expl", [x, u], [f_expl])
 
-        # *** OBSTACLE CONSTRAINTS DEFINITION ***
-        h_expr = []
-        h_min = []
-        h_max = []
+        # *** OBSTACLE CONSTRAINT DEFINITION ***
+        box = ca.MX.sym("b", 6)
 
-        for obs in params.obstacles:
-
-            if obs["type"] == "sphere":
-
-                c = obs["center"]
-                r = obs["radius"]
-
-                h = (p[0] - c[0])**2 + (p[1] - c[1])**2 + (p[2] - c[2])**2
-                h_expr.append(h)
-
-                h_min.append((r+params.maxRad)**2)
-                h_max.append(1e10)
-
-            elif obs["type"] == "box":
-
-                c = obs["center"]
-                d = obs["dimensions"]
-
-                # semi-dimensions
-                b = d / 2.0
-
-                # signed distance function (SDF) for axis-aligned box
-                q = ca.fabs(p - c) - b
-
-                # outside distance
-                outside = ca.fmax(q, 0)
-                outside_dist = ca.norm_2(outside)
-
-                # inside distance
-                inside_dist = ca.fmin(ca.fmax(q[0], ca.fmax(q[1], q[2])), 0)
-
-                # signed distance
-                dist = outside_dist + inside_dist
-
-                # safety margin for drone radius
-                h = dist - params.maxRad
-
-                h_expr.append(h)
-
-                # enforce h >= 0
-                h_min.append(0.0)
-                h_max.append(1e10)
-
-        self.h_expr = vertcat(*h_expr)
-        self.h_min = np.array(h_min)
-        self.h_max = np.array(h_max)
-
-        self.h_func = ca.Function("h_func", [x], [self.h_expr])
+        h_box = ca.vertcat(
+            p[0] - (box[0] + params.maxRad),  # x >= x_min + maxRad
+            (box[1] - params.maxRad) - p[0],  # x <= x_max - maxRad
+            p[1] - (box[2] + params.maxRad),  # y >= y_min + maxRad
+            (box[3] - params.maxRad) - p[1],  # y <= y_max - maxRad
+            p[2] - (box[4] + params.maxRad),  # z >= z_min + maxRad
+            (box[5] - params.maxRad) - p[2]   # z <= z_max - maxRad
+        )
+        
+        self.h_expr = h_box
+        self.h_min = np.zeros(6)
+        self.h_max = np.full(6, 1e6)
 
         # *** INPUT CONSTRAINTS DEFINITION ***
         self.u_min = np.zeros(self.nu)
         self.u_max = np.ones(self.nu)
 
-        # *** PARAMETERS ***
-        box = ca.MX.sym("b", 6)
 
         # *** ACADOS MODEL CREATION ***
         model = AcadosModel()
@@ -354,7 +314,7 @@ def dynamicsSim(sim_solver, x, u, nsub):
 # OCP DEFINITION
 # =========================================================
 
-def define_ocp(model, params, safe_set, x0):
+def define_ocp(model, params, safe_set):
     # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
     ny = nx + nu
@@ -408,16 +368,6 @@ def define_ocp(model, params, safe_set, x0):
     # Initial state constraint
     ocp.constraints.x0 = x0
     
-    # State
-    if params.state_constraint_active:
-        ocp.constraints.lbx = np.array([params.xlim[0]+params.maxRad, params.ylim[0]+params.maxRad, params.zlim[0]+params.maxRad])  
-        ocp.constraints.ubx = np.array([params.xlim[1]-params.maxRad, params.ylim[1]-params.maxRad, params.zlim[1]-params.maxRad])  
-        ocp.constraints.idxbx = np.arange(3)
-
-        ocp.constraints.lbx_e = np.array([params.xlim[0]+params.maxRad, params.ylim[0]+params.maxRad, params.zlim[0]+params.maxRad])  
-        ocp.constraints.ubx_e = np.array([params.xlim[1]-params.maxRad, params.ylim[1]-params.maxRad, params.zlim[1]-params.maxRad])  
-        ocp.constraints.idxbx_e = np.arange(3)
-
     # Obstacles 
     ocp.model.con_h_expr_0 = model.h_expr
     ocp.constraints.lh_0 = model.h_min
@@ -435,7 +385,6 @@ def define_ocp(model, params, safe_set, x0):
     nn_expr = safe_set.nn_func(model.amodel.x, model.amodel.p)
 
     ocp.model.con_h_expr_e = vertcat(model.h_expr, nn_expr)
-
     ocp.constraints.lh_e = np.concatenate([model.h_min, [0.]])
     ocp.constraints.uh_e = np.concatenate([model.h_max, [1e6]])
 
@@ -494,43 +443,12 @@ def define_ocpSafeAbort(model, params):
     # Initial state constraint
     ocp.constraints.x0 = np.zeros(nx)  
     
-    # State
-    idx_pos = np.arange(0, 3)     # positions
+    # Velocity constraint
     idx_vel = np.arange(6, 12)    # velocities
 
-    # position bounds (only if active)
-    if params.state_constraint_active:
-
-        lb_pos = np.array([
-            params.xlim[0] + params.maxRad,
-            params.ylim[0] + params.maxRad,
-            params.zlim[0] + params.maxRad
-        ])
-
-        ub_pos = np.array([
-            params.xlim[1] - params.maxRad,
-            params.ylim[1] - params.maxRad,
-            params.zlim[1] - params.maxRad
-        ])
-
-        ocp.constraints.lbx = lb_pos
-        ocp.constraints.ubx = ub_pos
-        ocp.constraints.idxbx = idx_pos
-
-        # velocities must be zero
-        lb_vel = np.zeros(6)
-        ub_vel = np.zeros(6)
-
-        # concatenate
-        ocp.constraints.idxbx_e = np.concatenate((idx_pos, idx_vel))
-        ocp.constraints.lbx_e = np.concatenate((lb_pos, lb_vel))
-        ocp.constraints.ubx_e = np.concatenate((ub_pos, ub_vel))
-
-    else:
-        # only velocity constraint
-        ocp.constraints.idxbx_e = idx_vel
-        ocp.constraints.lbx_e = np.zeros(6)
-        ocp.constraints.ubx_e = np.zeros(6)
+    ocp.constraints.idxbx_e = idx_vel
+    ocp.constraints.lbx_e = np.zeros(6)
+    ocp.constraints.ubx_e = np.zeros(6)
 
     # Obstacles 
     ocp.model.con_h_expr_0 = model.h_expr
@@ -619,8 +537,11 @@ class NetSafeSet():
         model_net = NeuralNetwork(params.input_size, params.hidden_size, params.output_size, params.number_hidden, params.act_fun, 1).to(params.device)
         model_net.load_state_dict(nn_data['model'])
 
-        x_cp = model.x
-        p_cp = model.p
+        x_cp = model.amodel.x
+        p_cp = model.amodel.p
+
+
+
 
         # Standardize box dimensions
         box = (p_cp - nn_data['mean'][:nbox]) / nn_data['std'][:nbox]
@@ -644,14 +565,280 @@ class NetSafeSet():
         self.nn_func = ca.Function('nn_func', [model.x, model.p], [nn_model])
 
 # =========================================================
+# BOX CONSTRAINTS DEFINITION
+# =========================================================
+
+def min_cube_select(params, Q, R=None, goal_point=None):
+    """
+    Python equivalent of the MATLAB function minCubeSelect.
+    
+    Parameters
+    ----------
+    Q : ndarray, shape (N, 3)
+        Centers of the spheres.
+    R : ndarray, shape (N,)
+        Radii of the spheres.
+    goal_point : ndarray, shape (3,), optional
+        Point that must be included in the box.
+    
+    Returns
+    -------
+    xMin, xMax, yMin, yMax, zMin, zMax : float
+        Bounds of the optimal box.
+    exitflag : int
+        Optimization success flag (1 = success, 0 = failure).
+    all_outside : bool
+        Whether all spheres are outside the box.
+    goal_included : bool
+        Whether the goal point is included in the box (if provided).
+    """
+
+    if R is None:
+        R = np.zeros(Q.shape[0])
+
+    # Initial guess adjusted to include goal point if provided
+    if goal_point is not None:
+        # Start with a box that includes the goal point
+        margin = 0.1
+        x0 = np.array([
+            min(-params.maxRad, goal_point[0] - margin),
+            max(params.maxRad, goal_point[0] + margin),
+            min(-params.maxRad, goal_point[1] - margin),
+            max(params.maxRad, goal_point[1] + margin),
+            min(-params.maxRad, goal_point[2] - margin),
+            max(params.maxRad, goal_point[2] + margin)
+        ])
+    else:
+        x0 = np.array([-params.maxRad, params.maxRad, -params.maxRad, params.maxRad, -params.maxRad, params.maxRad])
+
+    # Bounds (origin must be inside)
+    bounds = [
+        (-2.0, 0.0),   # xMin
+        (0.0, 2.0),    # xMax
+        (-2.0, 0.0),   # yMin
+        (0.0, 2.0),    # yMax
+        (-2.0, 0.0),   # zMin
+        (0.0, 2.0)     # zMax
+    ]
+
+    # Objective: maximize volume -> minimize negative volume
+    def objective(x):
+        return -box_volume(x)
+    
+    # Constraints list
+    constraints_list = []
+
+    # Nonlinear inequality constraints (c(x) >= 0)
+    constraints_list.append({
+        "type": "ineq",
+        "fun": lambda x: sphere_box_constraints(x, Q, R)
+    })
+
+    # Nonlinear inequality constraints (c(x) >= 0)
+    constraints_list.append({
+        "type": "ineq",
+        "fun": lambda x: drone_occupancy(x, params.maxRad)
+    })
+
+    # Goal point constraint (if provided)
+    if goal_point is not None:
+        eps = 1e-3
+        constraints_list.append({
+            "type": "ineq",
+            "fun": lambda x: np.array([
+                goal_point[0] - x[0] - eps,  # goal_x >= xMin
+                x[1] - goal_point[0] - eps,  # goal_x <= xMax
+                goal_point[1] - x[2] - eps,  # goal_y >= yMin
+                x[3] - goal_point[1] - eps,  # goal_y <= yMax
+                goal_point[2] - x[4] - eps,  # goal_z >= zMin
+                x[5] - goal_point[2] - eps   # goal_z <= zMax
+            ])
+        })
+
+    # Solve optimization
+    result = minimize(
+        objective,
+        x0,
+        method="trust-constr",
+        bounds=bounds,
+        constraints=constraints_list,
+        options={"verbose": 0}
+    )
+
+    xOpt = result.x
+    exitflag = int(result.success)
+
+    if goal_point is not None:
+        goal_included = (
+            (xOpt[0] <= goal_point[0] <= xOpt[1]) and
+            (xOpt[2] <= goal_point[1] <= xOpt[3]) and
+            (xOpt[4] <= goal_point[2] <= xOpt[5])
+        )
+    else:
+        goal_included = True
+
+    return (
+        xOpt[0], xOpt[1],
+        xOpt[2], xOpt[3],
+        xOpt[4], xOpt[5],
+        exitflag,
+        goal_included
+    )
+
+def box_volume(x):
+    """
+    Compute volume of the box.
+    """
+    dx = x[1] - x[0]
+    dy = x[3] - x[2]
+    dz = x[5] - x[4]
+    return dx * dy * dz
+
+def drone_occupancy(x, drone_radius):
+    """
+    Inequality constraints ensuring the box can contain a sphere
+    of radius 0.5 centered at the origin.
+    
+    Since xMin, yMin, zMin are always negative (from bounds),
+    we ensure they are <= -0.5, and xMax, yMax, zMax are >= 0.5.
+    
+    Returns c such that c >= 0 (for scipy 'ineq' constraint).
+    """
+    xMin, xMax, yMin, yMax, zMin, zMax = x
+    
+    eps = 1e-6  # small tolerance for numerical stability
+    
+    # Since mins are negative: xMin <= -drone_radius means -xMin >= drone_radius
+    # Since maxs are positive: xMax >= drone_radius
+    c = np.array([
+        -xMin - drone_radius + eps,  # -xMin >= drone_radius (since xMin < 0)
+        xMax - drone_radius + eps,   # xMax >= drone_radius
+        -yMin - drone_radius + eps,  # -yMin >= drone_radius (since yMin < 0)
+        yMax - drone_radius + eps,   # yMax >= drone_radius
+        -zMin - drone_radius + eps,  # -zMin >= drone_radius (since zMin < 0)
+        zMax - drone_radius + eps    # zMax >= drone_radius
+    ])
+    
+    return c
+
+def sphere_box_constraints(x, Q, R):
+    """
+    Inequality constraints enforcing that each sphere
+    does not intersect the box.
+    
+    Returns c such that c <= 0.
+    """
+
+    xMin, xMax, yMin, yMax, zMin, zMax = x
+
+    N = Q.shape[0]
+    c = np.zeros(N)
+
+    for i in range(N):
+        cx, cy, cz = Q[i]
+        r = R[i]
+
+        dx = max(xMin - cx, 0.0, cx - xMax)
+        dy = max(yMin - cy, 0.0, cy - yMax)
+        dz = max(zMin - cz, 0.0, cz - zMax)
+
+        dist2 = dx**2 + dy**2 + dz**2
+
+        # inequality: dist^2 >= 0 
+        c[i] = -r**2 + dist2 - 1e-3
+
+    return c
+
+def discretize_box_surface(center, dims, step):
+    """
+    Discretize the surface of an axis-aligned box.
+    
+    Parameters
+    ----------
+    center : array-like (3,)
+        Box center (cx, cy, cz)
+    dims : array-like (3,)
+        Box dimensions (dx, dy, dz)
+    step : float
+        Maximum grid spacing
+        
+    Returns
+    -------
+    points : ndarray (N, 3)
+        Surface points including vertices
+    """
+    cx, cy, cz = center
+    dx, dy, dz = dims / 2.0 
+
+    # Bounds
+    x = np.linspace(cx - dx, cx + dx,
+                    int(np.ceil((2*dx)/step)) + 1)
+    y = np.linspace(cy - dy, cy + dy,
+                    int(np.ceil((2*dy)/step)) + 1)
+    z = np.linspace(cz - dz, cz + dz,
+                    int(np.ceil((2*dz)/step)) + 1)
+
+    X, Y = np.meshgrid(x, y, indexing='ij')
+    X2, Z = np.meshgrid(x, z, indexing='ij')
+    Y2, Z2 = np.meshgrid(y, z, indexing='ij')
+
+    # 6 faces
+    faces = [
+        np.column_stack([X.ravel(), Y.ravel(),
+                         np.full(X.size, cz - dz)]),
+        np.column_stack([X.ravel(), Y.ravel(),
+                         np.full(X.size, cz + dz)]),
+        np.column_stack([X2.ravel(),
+                         np.full(X2.size, cy - dy),
+                         Z.ravel()]),
+        np.column_stack([X2.ravel(),
+                         np.full(X2.size, cy + dy),
+                         Z.ravel()]),
+        np.column_stack([np.full(Y2.size, cx - dx),
+                         Y2.ravel(),
+                         Z2.ravel()]),
+        np.column_stack([np.full(Y2.size, cx + dx),
+                         Y2.ravel(),
+                         Z2.ravel()])
+    ]
+
+    points = np.vstack(faces)
+
+    # Remove duplicates (edges/vertices appear multiple times)
+    points = np.unique(points, axis=0)
+
+    return points
+
+# =========================================================
 # MPC + SIMULATION
 # =========================================================
+
 def run_mpc(model, params):
     '''Compute, apply and simulate MPC control.'''
     
-    # Define safe set
+    # *** DEFINE SAFE SET ***
     safe_set = NetSafeSet(model, params)
 
+    # *** DISCRETIZE OBSTACLES FOR CONSTRAINTS ***
+    obsCenters = []
+    obsRadii = []
+
+    for obs in params.obstacles:
+        if obs['type'] == 'sphere':
+            obsCenters.append(obs['center'])
+            obsRadii.append(obs['radius'])
+        elif obs['type'] == 'box':
+            discObs = discretize_box_surface(obs['center'], obs['dimensions'], params.maxRad)
+            obsCenters.append(discObs)
+            obsRadii.append(np.full(discObs.shape[0], 0.0))
+    
+    if len(obsCenters) > 0:
+        obsCenters = np.vstack(obsCenters)
+        obsRadii = np.concatenate(obsRadii)
+    else:
+        obsCenters = np.empty((0, 3))
+        obsRadii = np.empty((0,))
+    
     # *** OCPs DEFINITION ***
     ocp = define_ocp(model, params, safe_set)
     ocpSafeAbort = define_ocpSafeAbort(model, params)
@@ -662,21 +849,30 @@ def run_mpc(model, params):
     sim_solver = create_acados_sim(model, params)
 
     # *** VARIABLES DEFINITION ***
-    x0_list = np.zeros((1, model.nx))  # List of initial states (can be modified to include multiple initial conditions)
+    x0_list = np.zeros((1, model.nx))  # ♟️ PLACEHOLDER: List of initial states (can be modified to include multiple initial conditions)
 
     xg_all = []
     ug_all = []
 
     for x0 in x0_list:
         x = x0
-        x = np.zeros(model.nx)  # Initial state (can be modified as needed)
         xg = [x.copy()]
         ug = []
 
         x_prev = x
         u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
         
-        boxes = np.zeros(6) # Placeholder for box dimensions, to be updated if needed
+        # Calculate initial box
+        if len(obsCenters) > 0:
+            Q = obsCenters - x[:3]
+            x_min, x_max, y_min, y_max, z_min, z_max, _ , _ = min_cube_select(params, Q, obsRadii)
+            box = np.array([x_min + x[0], x_max + x[0], 
+                            y_min + x[1], y_max + x[1], 
+                            z_min + x[2], z_max + x[2]])
+        else:
+            box = np.array([params.xlim[0], params.xlim[1],
+                            params.ylim[0], params.ylim[1],
+                            params.zlim[0], params.zlim[1]])
 
         # *** FIRST INITIALIZATION ***
         initialize_guess(
@@ -686,7 +882,7 @@ def run_mpc(model, params):
             x,
             u_guess=u_prev,
             x_guess=x_prev,
-            p_guess=boxes
+            p_guess=box
         )
 
         # *** MPC LOOP ***
@@ -718,7 +914,14 @@ def run_mpc(model, params):
                 u_sol = u_prev.copy()
                     
             x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
-            rollback_guess(solver, model, params, x_next, p_guess=boxes)
+
+            if len(obsCenters) > 0:
+                Q = obsCenters - x_next[:3]
+                x_min, x_max, y_min, y_max, z_min, z_max, _ , _ = min_cube_select(params, Q, obsRadii)
+                box = np.array([x_min + x_next[0], x_max + x_next[0], 
+                                y_min + x_next[1], y_max + x_next[1], 
+                                z_min + x_next[2], z_max + x_next[2]])
+            rollback_guess(solver, model, params, x_next, p_guess=box)
 
             x = x_next.copy()
             x_prev = x_sol.copy()
