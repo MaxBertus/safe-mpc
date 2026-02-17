@@ -1,3 +1,4 @@
+from xml.parsers.expat import model
 import numpy as np
 from scipy.optimize import minimize
 import casadi as ca
@@ -11,6 +12,7 @@ from safe_mpc import ocp
 from utils.plotter import plotter
 import os
 import pickle
+import ctypes
 from tqdm import tqdm
 
 # =========================================================
@@ -52,7 +54,7 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
@@ -63,21 +65,24 @@ class Params:
         ]
         
         # Room dimensions
-        self.xlim = [-3.0, 3.0]
-        self.ylim = [-3.0, 3.0] 
-        self.zlim = [-2.0, 4.0]
+        self.xlim = [-2.0, 2.0]
+        self.ylim = [-2.0, 2.0] 
+        self.zlim = [-2.0, 1.6]
 
         # *** NEURAL NETWORK PARAMETERS ***
         self.input_size = 15 # 6 box dimensions + 3 orientations + 3 linear velocities + 3 angular velocities = 15
         self.hidden_size = 512
         self.output_size = 1
-        self.number_hidden = 3
+        self.number_hidden = 2
         self.act_fun = torch.nn.GELU(approximate='tanh')
-        self.net_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"nn/sth_{self.act_fun}.pt")
+        self.net_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"nn/sth_gelu.pt")
         self.build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nn")
         self.eps = 1e-6
         self.alpha = 5
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda:0') 
+        else:
+            self.device = torch.device('cpu')
 
 # =========================================================
 # MODEL GENERATION
@@ -171,7 +176,7 @@ class SthModel:
             (box[5] - params.maxRad) - p[2]   # z <= z_max - maxRad
         )
         
-        self.h_expr = h_box
+        self.h_func = ca.Function('h_func', [x, box], [h_box])
         self.h_min = np.zeros(6)
         self.h_max = np.full(6, 1e6)
 
@@ -253,6 +258,8 @@ def create_acados_sim(model, params):
 
     sim.solver_options.T = params.dtSim
 
+    sim.parameter_values = np.zeros(6)
+
     return AcadosSimSolver(sim, json_file="acados_sim.json")
 
 # =========================================================
@@ -322,12 +329,15 @@ def define_ocp(model, params, safe_set):
 
     # *** OCP OBJECT CREATION ***
     ocp = AcadosOcp()
-    ocp.model = model.amodel
+    ocp.model = copy.deepcopy(model.amodel)
     ocp.dims.N = params.N
     ocp.solver_options.tf = params.N * params.dt
+    ocp.model.name = params.robot_name + "_tracking"
 
     ocp.cost.cost_type = "LINEAR_LS"
     ocp.cost.cost_type_e = "LINEAR_LS"
+
+    ocp.parameter_values = np.zeros(6)
 
     # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
@@ -366,27 +376,30 @@ def define_ocp(model, params, safe_set):
     ocp.constraints.idxbu = np.arange(nu)
 
     # Initial state constraint
-    ocp.constraints.x0 = x0
+    ocp.constraints.x0 = np.zeros(nx)
     
     # Obstacles 
-    ocp.model.con_h_expr_0 = model.h_expr
+    h_expr = model.h_func(model.amodel.x, model.amodel.p)
+
+    ocp.model.con_h_expr_0 = h_expr
     ocp.constraints.lh_0 = model.h_min
     ocp.constraints.uh_0 = model.h_max
 
-    ocp.model.con_h_expr = model.h_expr
+    ocp.model.con_h_expr = h_expr
     ocp.constraints.lh = model.h_min
     ocp.constraints.uh = model.h_max
 
-    ocp.model.con_h_expr_e = model.h_expr
+    ocp.model.con_h_expr_e = h_expr
     ocp.constraints.lh_e = model.h_min
     ocp.constraints.uh_e = model.h_max
 
     # Neural network safe set constraint
     nn_expr = safe_set.nn_func(model.amodel.x, model.amodel.p)
 
-    ocp.model.con_h_expr_e = vertcat(model.h_expr, nn_expr)
-    ocp.constraints.lh_e = np.concatenate([model.h_min, [0.]])
-    ocp.constraints.uh_e = np.concatenate([model.h_max, [1e6]])
+    ocp.model.con_h_expr_e = vertcat(h_expr, nn_expr)
+    ocp.constraints.lh_e = np.zeros((7,1))
+    ocp.constraints.uh_e = np.full((7,1), 1e6)
+
 
     # *** SOLVER PARAMETERS DEFINITION ***
     ocp.solver_options.integrator_type = "ERK"
@@ -395,6 +408,16 @@ def define_ocp(model, params, safe_set):
     ocp.solver_options.nlp_solver_type = "SQP" 
 
     ocp.solver_options.nlp_solver_max_iter = 500
+
+
+    # Link the l4casadi shared library so acados can resolve "aSTedH_model"
+    ocp.solver_options.custom_templates = []
+
+    # Add the l4casadi lib path to the linker
+    lib_name = f'{params.robot_name}_model'
+    ocp.solver_options.ext_fun_compile_flags = f'-I{params.build_dir}'
+    ocp.solver_options.link_libs = f'-L{params.build_dir} -l{lib_name} -Wl,-rpath,{params.build_dir}'
+
 
     return ocp
 
@@ -405,12 +428,15 @@ def define_ocpSafeAbort(model, params):
 
     # *** OCP OBJECT CREATION ***
     ocp = AcadosOcp()
-    ocp.model = model.amodel
+    ocp.model = copy.deepcopy(model.amodel)
     ocp.dims.N = params.N
     ocp.solver_options.tf = params.N * params.dt
+    ocp.model.name = params.robot_name + "_safe_abort"
 
     ocp.cost.cost_type = "LINEAR_LS"
     ocp.cost.cost_type_e = "LINEAR_LS"
+
+    ocp.parameter_values = np.zeros(6)
 
     # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
@@ -451,15 +477,17 @@ def define_ocpSafeAbort(model, params):
     ocp.constraints.ubx_e = np.zeros(6)
 
     # Obstacles 
-    ocp.model.con_h_expr_0 = model.h_expr
+    h_expr = model.h_func(model.amodel.x, model.amodel.p)
+
+    ocp.model.con_h_expr_0 = h_expr
     ocp.constraints.lh_0 = model.h_min
     ocp.constraints.uh_0 = model.h_max
 
-    ocp.model.con_h_expr = model.h_expr
+    ocp.model.con_h_expr = h_expr
     ocp.constraints.lh = model.h_min
     ocp.constraints.uh = model.h_max
 
-    ocp.model.con_h_expr_e = model.h_expr
+    ocp.model.con_h_expr_e = h_expr
     ocp.constraints.lh_e = model.h_min
     ocp.constraints.uh_e = model.h_max
 
@@ -532,26 +560,37 @@ class NetSafeSet():
         nbox = 6
         nbori = nbox + nori
 
-        nn_data = torch.load(params.net_path,
-                             map_location=params.device)
+        nn_data = torch.load(params.net_path, weights_only=False)
+
         model_net = NeuralNetwork(params.input_size, params.hidden_size, params.output_size, params.number_hidden, params.act_fun, 1).to(params.device)
         model_net.load_state_dict(nn_data['model'])
 
         x_cp = model.amodel.x
         p_cp = model.amodel.p
 
-        # Standardize box dimensions
-        box = p_cp - x_cp[:npos]
-        box = (p_cp - nn_data['mean'][:nbox]) / nn_data['std'][:nbox]
+        # Translate box to robot frame, reorder to [mins, maxs] and standardize (to follow VBOC input format)
+        box_in_robot_frame = p_cp[[0, 2, 4, 1, 3, 5]] - ca.vertcat(x_cp[0], x_cp[1], x_cp[2], x_cp[0], x_cp[1], x_cp[2])
+        # Clip lower bounds: box_min distances cannot exceed room limits (negated because robot-relative)
+        room_lower = ca.DM([-2.0, -2.0, -2.0])
+        room_upper = ca.DM([2.0, 2.0, 2.0])
+
+        box_lower = box_in_robot_frame[:3]
+        box_upper = box_in_robot_frame[3:]
+
+        # Apply element-wise clipping using CasADi symbolic ops
+        box_in_robot_frame[:3] = -ca.fmax(box_lower, room_lower)  
+        box_in_robot_frame[3:] =  ca.fmin( box_upper,  room_upper)  
+        box = (box_in_robot_frame - nn_data['mean']) / nn_data['std']
 
         # Standardize initial orientation
-        orient = (x_cp[npos:npos+nori] - nn_data['mean'][nbox:nbori]) / nn_data['std'][nbox:nbori]
+        orient = (x_cp[npos:npos+nori] - nn_data['mean']) / nn_data['std']
 
         # Normalize velocities            
-        vel_norm = ca.norm_2(x_cp[npos+nori:])
-        vel_dir = x_cp[npos+nori:] / (vel_norm + params.eps) 
+        # vel_norm = ca.norm_2(x_cp[npos+nori:])
+        vel_norm = ca.sqrt(ca.dot(x_cp[npos+nori:], x_cp[npos+nori:]) + params.eps**2)
+        vel_dir = x_cp[npos+nori:] / (vel_norm) 
 
-        state = ca.vertcat(box, orient, vel_dir)
+        state = ca.vertcat(box, orient, -vel_dir)
 
         self.l4c_model = l4c.L4CasADi(model_net,
                                       device=params.device,
@@ -560,7 +599,7 @@ class NetSafeSet():
     
         nn_model = self.l4c_model(state) * (100 - params.alpha) / 100 - vel_norm
        
-        self.nn_func = ca.Function('nn_func', [model.x, model.p], [nn_model])
+        self.nn_func = ca.Function('nn_func', [model.amodel.x, model.amodel.p], [nn_model])
 
 # =========================================================
 # BOX CONSTRAINTS DEFINITION
@@ -817,6 +856,9 @@ def run_mpc(model, params):
     # *** DEFINE SAFE SET ***
     safe_set = NetSafeSet(model, params)
 
+    # result = safe_set.nn_func(np.array([0.0,0.0,0.0, 0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,0.0,0.0]), np.array([-2, 2, -2, 2, -2, 2]))
+    # print("NN output at origin with box [-2,2] in all dimensions:", result)
+
     # *** DISCRETIZE OBSTACLES FOR CONSTRAINTS ***
     obsCenters = []
     obsRadii = []
@@ -842,6 +884,8 @@ def run_mpc(model, params):
     ocpSafeAbort = define_ocpSafeAbort(model, params)
 
     # *** SOLVERS CREATION ***
+    ctypes.CDLL(os.path.join(params.build_dir, f'lib{params.robot_name}_model.so'), mode=ctypes.RTLD_GLOBAL)
+
     solver = AcadosOcpSolver(ocp, json_file="acados_ocp.json")
     solverSafeAbort = AcadosOcpSolver(ocpSafeAbort, json_file="acados_ocp_safe_abort.json")
     sim_solver = create_acados_sim(model, params)
@@ -857,9 +901,10 @@ def run_mpc(model, params):
         xg = [x.copy()]
         ug = []
 
-        x_prev = x
-        u_prev = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
-        
+        x_prev = np.full((params.N + 1, model.nx), x)
+        u0 = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
+        u_prev = np.full((params.N, model.nu), u0)
+
         # Calculate initial box
         if len(obsCenters) > 0:
             Q = obsCenters - x[:3]
@@ -890,9 +935,22 @@ def run_mpc(model, params):
 
         for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
         
+            # Print actual x and box for debugging
+            # print(f"Current state x: {x}")
+            # print(f"Current box: {box}")
+
+            # Test NN output at current state and box for debugging
+            result = safe_set.nn_func(x, box)
+            print("NN output at current state and box:", result)
+
             solver.solve_for_x0(x, False, False)
             x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
             u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
+
+            # Do previous debug with last predicted state and box for comparison
+            # print(f"Predicted next state x_sol[1]: {x_sol[params.N]}") 
+            result = safe_set.nn_func(x_sol[params.N], box)
+            print("NN output at predicted next state and box:", result)
 
             feas = solver.get_status()
 
@@ -901,7 +959,7 @@ def run_mpc(model, params):
             else:
                 if fails == 0:
                     print("MPC infeasibility detected.")
-                    solverSafeAbort.solve_for_x0( x_prev[params.N-1] , False, False) # Why N-1?
+                    solverSafeAbort.solve_for_x0( x_prev[params.N-1,:] , False, False) # Why N-1?
                 elif fails == params.N-1:
                     print("MPC infeasibility persists. Following safe abort strategy.")
                     follow_safe_abort = True
@@ -919,7 +977,7 @@ def run_mpc(model, params):
                 box = np.array([x_min + x_next[0], x_max + x_next[0], 
                                 y_min + x_next[1], y_max + x_next[1], 
                                 z_min + x_next[2], z_max + x_next[2]])
-            rollback_guess(solver, model, params, x_next, p_guess=box)
+            rollback_guess(solver, model, params, x_next, p_current=box)
 
             x = x_next.copy()
             x_prev = x_sol.copy()

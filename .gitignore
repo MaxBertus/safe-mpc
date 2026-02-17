@@ -6,6 +6,9 @@
 *.zip
 *.json
 *.txt
+*.pt
+*.so
+*.cpp
 generated/*
 nn_models/*
 data/*
