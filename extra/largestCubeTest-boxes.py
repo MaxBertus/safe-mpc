@@ -142,7 +142,7 @@ def discretize_boxes_surfaces(centers, half_dims, step):
 if __name__ == "__main__":
 
     counter = 0
-    for r in range(1, 500):
+    for r in range(1, 10):
 
         Q, D = generate_random_boxes(5, seed=r)
 
@@ -163,12 +163,12 @@ if __name__ == "__main__":
             counter += 1
 
         # Visualize
-        # plot_cube(
-        #     x_min, x_max,
-        #     y_min, y_max,
-        #     z_min, z_max,
-        #     centers=Q,
-        #     half_dims=D,
-        #     points=points,
-        #     plotter=r
-        # )
+        plot_cube(
+            x_min, x_max,
+            y_min, y_max,
+            z_min, z_max,
+            centers=Q,
+            half_dims=D,
+            points=points,
+            plotter=r
+        )

@@ -193,6 +193,9 @@ def box_volume(x):
     dz = x[5] - x[4]
     return dx * dy * dz
 
+def smooth_max(a, b, c, eps=1e-6):
+    return 0.5*(a + b + c + np.sqrt((a-b)**2 + eps) + np.sqrt((b-c)**2 + eps))
+
 def sphere_box_constraints(x, Q, R):
     """
     Inequality constraints enforcing that each sphere
@@ -210,9 +213,9 @@ def sphere_box_constraints(x, Q, R):
         cx, cy, cz = Q[i]
         r = R[i]
 
-        dx = max(xMin - cx, 0.0, cx - xMax)
-        dy = max(yMin - cy, 0.0, cy - yMax)
-        dz = max(zMin - cz, 0.0, cz - zMax)
+        dx = smooth_max(xMin - cx, 0.0, cx - xMax)
+        dy = smooth_max(yMin - cy, 0.0, cy - yMax)
+        dz = smooth_max(zMin - cz, 0.0, cz - zMax)
 
         dist2 = dx**2 + dy**2 + dz**2
 

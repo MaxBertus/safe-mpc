@@ -2,6 +2,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from utils.animator import animator
+from utils.animator_vboc import animator
 from rich.traceback import install
 install(show_locals=True)
 
@@ -21,12 +22,20 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         xCollection = data["xg"]        # (Ntraj, Nvar+1, 12)
         uCollection = data["ug"] 
 
+        if "bg" in data:
+            bCollection = data["bg"]
+            bHistory = bCollection[0]      # (N, 15)
+
         xHistory = xCollection[0]      # (N, 12)
         uHistory = uCollection[0]      # (N-1, 6)
+        
     elif isinstance(data["xg"], np.ndarray):
         xHistory = data["xg"][:, :]  # (N, 12)
         uHistory = data["ug"][:, :]    # (N-1, 6)
 
+        if "bg" in data:
+            bHistory = data["bg"][:]    # (N, 15)
+        
     print(f"Loaded data from {file_path}") 
 
     N = xHistory.shape[0] - 1
@@ -137,13 +146,18 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     # *** ANIMATION ***
     if animate:
-        pos = xHistory[:, 0:3]        # (N, 3)
-        angles = xHistory[:, 3:6]     # (N, 3)
 
         if params.maxRad != 0.0:
             ell_axes = [params.maxRad, params.maxRad, params.maxRad]
         else:
             ell_axes = None
 
-        animator(pos, angles, params)
-
+        pos = xHistory[:, 0:3]        # (N, 3)
+        angles = xHistory[:, 3:6]     # (N, 3)
+ 
+        if "bg" in data:
+            box = bHistory[:]      # (N, 6)
+            animator(pos, angles, box, params)
+        else:
+            box = None
+            animator(pos, angles, params)

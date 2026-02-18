@@ -42,8 +42,12 @@ class Params:
                            1e2, 1e2, 1e2,   # orientation
                            1e1, 1e1, 1e1,   # linear velocities 
                            5e1, 5e1, 5e1])  # angular velocities
+        self.Qv = np.diag([1e2, 1e2, 1e2,   # linear velocities 
+                           1e2, 1e2, 1e2])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
-        self.N = 100
+        self.N = 30
+        self.Nvboc = 50
+        self.nlp_solver_max_iter = 100
 
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
@@ -54,20 +58,22 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            # {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            # {"center": np.array([0.0, 0.0, 1.5]), "radius": 0.2, "type": "sphere"},    
+            #{"center": np.array([1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            #{"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            #{"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.25, "type": "sphere"},    
         ]
         
         # Room dimensions
-        self.xlim = [-2.0, 2.0]
-        self.ylim = [-2.0, 2.0] 
-        self.zlim = [-2.0, 1.6]
+        self.xlim = [-3.0, 3.0]
+        self.ylim = [-3.0, 3.0] 
+        self.zlim = [-3.0, 3.0]
 
         # *** NEURAL NETWORK PARAMETERS ***
         self.input_size = 15 # 6 box dimensions + 3 orientations + 3 linear velocities + 3 angular velocities = 15
@@ -198,7 +204,7 @@ class SthModel:
 # =========================================================
 # INITIAL GUESS
 # =========================================================
-def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None, p_guess=None):
+def initialize_guess(solver, N, model, params, x0, u_guess=None, x_guess=None, p_guess=None):
     """
     Initialize the OCP with a state and control guess.
 
@@ -209,7 +215,6 @@ def initialize_guess(solver, model, params, x0, u_guess=None, x_guess=None, p_gu
     """
 
     # *** DIMENSIONS DEFINITION ***
-    N = params.N
     nx = model.nx
     nu = model.nu
 
@@ -288,6 +293,7 @@ def rollback_guess(solver, model, params, x_current, p_current=None):
     # *** SET GUESS ***
     initialize_guess(
         solver,
+        params.N,
         model,
         params,
         x_current,
@@ -407,7 +413,7 @@ def define_ocp(model, params, safe_set):
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP" 
 
-    ocp.solver_options.nlp_solver_max_iter = 500
+    ocp.solver_options.nlp_solver_max_iter = params.nlp_solver_max_iter
 
 
     # Link the l4casadi shared library so acados can resolve "aSTedH_model"
@@ -424,13 +430,14 @@ def define_ocp(model, params, safe_set):
 def define_ocpSafeAbort(model, params):
     # *** PROBLEM DIMENSIONS DEFINITION ***
     nx, nu = model.nx, model.nu
-    ny = nu
+    nv = 6                     # number of velocity states
+    ny = nv + nu               # velocities + inputs
 
     # *** OCP OBJECT CREATION ***
     ocp = AcadosOcp()
     ocp.model = copy.deepcopy(model.amodel)
-    ocp.dims.N = params.N
-    ocp.solver_options.tf = params.N * params.dt
+    ocp.dims.N = params.Nvboc
+    ocp.solver_options.tf = params.Nvboc * params.dt
     ocp.model.name = params.robot_name + "_safe_abort"
 
     ocp.cost.cost_type = "LINEAR_LS"
@@ -440,28 +447,52 @@ def define_ocpSafeAbort(model, params):
 
     # *** COST FUNCTION DEFINITION ***
     Vx = np.zeros((ny, nx))
-    Vu = np.eye(nu)
+    Vu = np.zeros((ny, nu))
+
+    # Select only velocities (states 6:12)
+    Vx[0:nv, nv:nx] = np.eye(nv)
+
+    # Select inputs
+    Vu[nv:, :] = np.eye(nu)
 
     ocp.cost.Vx = Vx
     ocp.cost.Vu = Vu
-    ocp.cost.Vx_e = np.zeros((nx, nx))
 
-    R = params.R
-    ocp.cost.W = R
-    ocp.cost.W_e = np.zeros((nx, nx)) 
+    # Terminal cost: only velocities
+    Vx_e = np.zeros((nv, nx))
+    Vx_e[:, nv:nx] = np.eye(nv)
+    ocp.cost.Vx_e = Vx_e
 
+    # Weights
+    Qv = params.Qv              # 6x6 velocity weight matrix
+    R = params.R                # nu x nu input weight matrix
+
+    W = np.zeros((ny, ny))
+    W[0:nv, 0:nv] = Qv
+    W[nv:, nv:] = R
+
+    ocp.cost.W = W
+    ocp.cost.W_e = Qv
+
+    # Hovering reference input
     if params.use_u_ref_hovering:
-        u_ref = np.linalg.pinv(model.R(params.x_ref).full() @ model.F) @ np.array([0, 0, params.mass * params.g])
+        u_hover = np.linalg.pinv(
+            model.R(np.zeros(nx)).full() @ model.F
+        ) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
     else:
-        u_ref = np.zeros(nu)
+        u_hover = np.zeros(nu)
 
-    ocp.cost.yref = u_ref
-    ocp.cost.yref_e = np.zeros(nx)
+    # Reference: zero velocities, hovering input
+    yref = np.zeros(ny)
+    yref[nv:] = u_hover
+
+    ocp.cost.yref = yref
+    ocp.cost.yref_e = np.zeros(nv)
 
     # *** CONSTRAINTS DEFINITION ***
-    # Input
     ocp.constraints.constr_type = "BGH"
 
+    # Input bounds
     ocp.constraints.lbu = model.u_min
     ocp.constraints.ubu = model.u_max
     ocp.constraints.idxbu = np.arange(nu)
@@ -469,12 +500,11 @@ def define_ocpSafeAbort(model, params):
     # Initial state constraint
     ocp.constraints.x0 = np.zeros(nx)  
     
-    # Velocity constraint
-    idx_vel = np.arange(6, 12)    # velocities
-
-    ocp.constraints.idxbx_e = idx_vel
-    ocp.constraints.lbx_e = np.zeros(6)
-    ocp.constraints.ubx_e = np.zeros(6)
+    # # Terminal velocity constraint (optional but kept as in original)
+    # idx_vel = np.arange(6, 12)
+    # ocp.constraints.idxbx_e = idx_vel
+    # ocp.constraints.lbx_e = np.zeros(6)
+    # ocp.constraints.ubx_e = np.zeros(6)
 
     # Obstacles 
     h_expr = model.h_func(model.amodel.x, model.amodel.p)
@@ -497,9 +527,10 @@ def define_ocpSafeAbort(model, params):
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP" 
 
-    ocp.solver_options.nlp_solver_max_iter = 500
+    ocp.solver_options.nlp_solver_max_iter = params.nlp_solver_max_iter
 
     return ocp
+
 
 # =========================================================
 # NEURAL NETWORK DEFINITION
@@ -873,12 +904,13 @@ def run_mpc(model, params):
             obsRadii.append(np.full(discObs.shape[0], 0.0))
     
     if len(obsCenters) > 0:
-        obsCenters = np.vstack(obsCenters)
-        obsRadii = np.concatenate(obsRadii)
+        if len(obsCenters) > 1:
+            obsCenters = np.vstack(obsCenters)
+            obsRadii = np.concatenate(obsRadii)
     else:
         obsCenters = np.empty((0, 3))
         obsRadii = np.empty((0,))
-    
+
     # *** OCPs DEFINITION ***
     ocp = define_ocp(model, params, safe_set)
     ocpSafeAbort = define_ocpSafeAbort(model, params)
@@ -895,11 +927,13 @@ def run_mpc(model, params):
 
     xg_all = []
     ug_all = []
+    bg_all = []
 
     for x0 in x0_list:
         x = x0
         xg = [x.copy()]
         ug = []
+        bg = []
 
         x_prev = np.full((params.N + 1, model.nx), x)
         u0 = np.linalg.pinv(model.R(x).full() @ model.F) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
@@ -920,6 +954,7 @@ def run_mpc(model, params):
         # *** FIRST INITIALIZATION ***
         initialize_guess(
             solver,
+            params.N,
             model,
             params,
             x,
@@ -940,8 +975,8 @@ def run_mpc(model, params):
             # print(f"Current box: {box}")
 
             # Test NN output at current state and box for debugging
-            result = safe_set.nn_func(x, box)
-            print("NN output at current state and box:", result)
+            # result = safe_set.nn_func(x, box)
+            # print("NN output at current state and box:", result)
 
             solver.solve_for_x0(x, False, False)
             x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
@@ -949,8 +984,8 @@ def run_mpc(model, params):
 
             # Do previous debug with last predicted state and box for comparison
             # print(f"Predicted next state x_sol[1]: {x_sol[params.N]}") 
-            result = safe_set.nn_func(x_sol[params.N], box)
-            print("NN output at predicted next state and box:", result)
+            # result = safe_set.nn_func(x_sol[params.N], box)
+            # print("NN output at predicted next state and box:", result)
 
             feas = solver.get_status()
 
@@ -958,10 +993,32 @@ def run_mpc(model, params):
                 fails = 0
             else:
                 if fails == 0:
-                    print("MPC infeasibility detected.")
+                    print("Alert: MPC infeasibility detected.")
+
+                    u_hover = np.linalg.pinv(
+                        model.R(x_prev[params.N,:]).full() @ model.F
+                    ) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
+
+                    # Initialize guess for safe abort
+                    x_guess_abort = np.tile(x_prev[params.N,:], (params.Nvboc + 1, 1))
+                    u_guess_abort = np.tile(u_hover, (params.Nvboc, 1))
+
+                    initialize_guess(
+                        solverSafeAbort,
+                        params.Nvboc,
+                        model,
+                        params,
+                        x,
+                        u_guess=u_guess_abort,
+                        x_guess=x_guess_abort,
+                        p_guess=box
+                    )
+
                     solverSafeAbort.solve_for_x0( x_prev[params.N-1,:] , False, False) # Why N-1?
+                
                 elif fails == params.N-1:
-                    print("MPC infeasibility persists. Following safe abort strategy.")
+                    actualTime = i*params.dt
+                    print(f"ATTENTION: MPC infeasibility persists. Following safe abort strategy at {actualTime}")
                     follow_safe_abort = True
                     break
                     
@@ -985,26 +1042,29 @@ def run_mpc(model, params):
 
             ug.append(u_sol[0])
             xg.append(x_next.copy())
+            bg.append(box.copy())
 
         if follow_safe_abort:
 
-            u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.N)])
-            
-            for j in range(0, params.N):
+            u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.Nvboc)])
+            for j in range(0, params.Nvboc):
                 x_next = dynamicsSim(sim_solver, x, u_sol[j], params.nsub)
 
                 x = x_next.copy()
                 ug.append(u_sol[j])
                 xg.append(x_next.copy())
+                bg.append(box.copy())
         
         xg_all.append(np.asarray(xg))
         ug_all.append(np.asarray(ug))
+        bg_all.append(np.asarray(bg))
 
     # *** DATA SAVING ***
     traj_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl")
     data = {
         "xg": xg_all,
-        "ug": ug_all
+        "ug": ug_all,
+        "bg": bg_all,
     }
 
     with open(traj_path, "wb") as f:

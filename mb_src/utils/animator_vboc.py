@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 # =========================================================
 # Rotation utilities
@@ -37,7 +38,6 @@ def axis_angle_rotation(axis, angle):
 def rotor_disc(center, normal, radius=0.08, n_points=40):
     normal = normal / np.linalg.norm(normal)
 
-    # Genera base del disco
     if abs(normal[2]) < 0.9:
         t1 = np.cross(normal, [0, 0, 1])
     else:
@@ -50,16 +50,37 @@ def rotor_disc(center, normal, radius=0.08, n_points=40):
         center + radius*(np.cos(t)*t1 + np.sin(t)*t2) for t in theta
     ])
 
-    # triangoli verso il centro
     x = np.hstack([center[0], circle_pts[:,0]])
     y = np.hstack([center[1], circle_pts[:,1]])
     z = np.hstack([center[2], circle_pts[:,2]])
 
-    # Triangoli: ogni punto con il centro e il successivo
     triangles = [[0, i, i+1] for i in range(1, n_points)]
-    triangles.append([0, n_points, 1])  # ultimo triangolo per chiudere
+    triangles.append([0, n_points, 1])
 
     return x, y, z, triangles
+
+
+# =========================================================
+# Bounding Box Helper
+# =========================================================
+
+def build_box_faces(xmin, xmax, ymin, ymax, zmin, zmax):
+    """Return the 6 faces of an axis-aligned box as a list of quad vertices."""
+    faces = [
+        # Bottom (z = zmin)
+        [(xmin, ymin, zmin), (xmax, ymin, zmin), (xmax, ymax, zmin), (xmin, ymax, zmin)],
+        # Top (z = zmax)
+        [(xmin, ymin, zmax), (xmax, ymin, zmax), (xmax, ymax, zmax), (xmin, ymax, zmax)],
+        # Front (y = ymin)
+        [(xmin, ymin, zmin), (xmax, ymin, zmin), (xmax, ymin, zmax), (xmin, ymin, zmax)],
+        # Back (y = ymax)
+        [(xmin, ymax, zmin), (xmax, ymax, zmin), (xmax, ymax, zmax), (xmin, ymax, zmax)],
+        # Left (x = xmin)
+        [(xmin, ymin, zmin), (xmin, ymax, zmin), (xmin, ymax, zmax), (xmin, ymin, zmax)],
+        # Right (x = xmax)
+        [(xmax, ymin, zmin), (xmax, ymax, zmin), (xmax, ymax, zmax), (xmax, ymin, zmax)],
+    ]
+    return faces
 
 
 # =========================================================
@@ -70,7 +91,8 @@ def update(i, pos, angles, axx, axy, axz,
            trail_line, time_text,
            arms, rotor_surfs,
            sphere_surf,
-           dt, ax, params):
+           dt, ax, params,
+           box_collection, box_array):  # box_array: None or ndarray of shape (N, 6)
 
     p = pos[i]
     roll, pitch, yaw = angles[i]
@@ -121,9 +143,8 @@ def update(i, pos, angles, axx, axy, axz,
 
         x, y, z, tris = rotor_disc(pc, rotor_normal, radius=params.propRad)
 
-        # Disegna disco pieno trasparente
         surf = ax.plot_trisurf(x, y, z, triangles=tris,
-                            color=colors[k], alpha=0.5, linewidth=0)
+                               color=colors[k], alpha=0.5, linewidth=0)
         rotor_surfs.append(surf)
 
     # Moving safety sphere
@@ -146,6 +167,12 @@ def update(i, pos, angles, axx, axy, axz,
             linewidth=0
         )
 
+    # --- Animated bounding box: update faces from row i of box_array ---
+    if box_collection is not None and box_array is not None:
+        box_params_i = box_array[i]   # shape (6,): xmin,xmax,ymin,ymax,zmin,zmax
+        faces = build_box_faces(*box_params_i)
+        box_collection.set_verts(faces)
+
     # Trail
     trail_line.set_data(pos[:i+1, 0], pos[:i+1, 1])
     trail_line.set_3d_properties(pos[:i+1, 2])
@@ -159,7 +186,15 @@ def update(i, pos, angles, axx, axy, axz,
 # Main animator with obstacles
 # =========================================================
 
-def animator(pos, angles, params):
+def animator(pos, angles, box, params):
+    """
+    Animate a hexacopter along a pre-computed trajectory.
+
+    A red semi-transparent bounding box is drawn if box is set.
+    box can be:
+      - a tuple/list (xmin, xmax, ymin, ymax, zmin, zmax): static box
+      - an ndarray of shape (N, 6): per-step animated box
+    """
 
     dt = params.dt
     num_steps = pos.shape[0]
@@ -205,6 +240,31 @@ def animator(pos, angles, params):
     trail_line, = ax.plot([], [], [], color="red", linewidth=0.8)
     time_text = fig.text(0.5, 0.02, "", ha="center")
 
+    # === Bounding box ===
+    # Normalize box input: accept tuple/list (static) or ndarray (N, 6) (animated)
+    box_collection = None
+    box_array = None  # will be ndarray (N, 6) or None
+
+    if box is not None:
+        box_np = np.asarray(box)
+
+        if box_np.ndim == 1:
+            # Static box: replicate across all steps
+            box_array = np.tile(box_np, (num_steps, 1))
+        else:
+            # Per-step box: shape (N, 6)
+            box_array = box_np
+
+        # Create the collection using the first frame
+        faces = build_box_faces(*box_array[0])
+        box_collection = Poly3DCollection(
+            faces,
+            facecolor=(1.0, 0.0, 0.0, 0.15),   # red, semi-transparent fill
+            edgecolor=(1.0, 0.0, 0.0, 0.6),     # red edges, slightly opaque
+            linewidth=0.8,
+        )
+        ax.add_collection3d(box_collection)
+
     # === Obstacles ===
     obstacles = getattr(params, "obstacles", [])
     for obs in obstacles:
@@ -240,7 +300,6 @@ def animator(pos, angles, params):
                 [vertices[0], vertices[1], vertices[2], vertices[3]],
                 [vertices[4], vertices[5], vertices[6], vertices[7]]
             ]
-            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
             face_collection = Poly3DCollection(faces, facecolor="gray",
                                                edgecolor="darkgray", alpha=0.3, linewidths=1)
             ax.add_collection3d(face_collection)
@@ -256,7 +315,8 @@ def animator(pos, angles, params):
                trail_line, time_text,
                arms, rotor_surfs,
                sphere_surf,
-               dt, ax, params)
+               dt, ax, params,
+               box_collection, box_array)
     )
 
     plt.show()
