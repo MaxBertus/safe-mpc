@@ -47,7 +47,7 @@ class Params:
         self.Qv = np.diag([1e2, 1e2, 1e2,   # linear velocities 
                            1e2, 1e2, 1e2])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
-        self.N = 30
+        self.N = 60
         self.Nvboc = 50
         self.nlp_solver_max_iter = 100
 
@@ -60,15 +60,15 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([1.5, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            {"center": np.array([2.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([2.0, 0.0, -0.5]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([-1.5, 0.0, 0.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
             # {"center": np.array([1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"},    
             # {"center": np.array([-1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"}, 
             # {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.5, "type": "sphere"},                         
@@ -677,8 +677,8 @@ def min_cube_select(Q=None, R=None, goal_point=None, drone_radius=0.5):
         box[4] = min(box[4], goal_point[2])
         box[5] = max(box[5], goal_point[2])
 
-    max_iter = 50
-    tol = 1e-9
+    max_iter = 100
+    tol = 1e-10
 
     for _ in range(max_iter):
         moved = False
@@ -988,6 +988,9 @@ def run_mpc(model, params):
 
         fails = 0 
         follow_safe_abort = False
+        ttot = 0.0
+        tmax = 0.0
+        tmin = params.dt * 10
 
         for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"): 
         
@@ -999,7 +1002,18 @@ def run_mpc(model, params):
             # result = safe_set.nn_func(x, box)
             # print("NN output at current state and box:", result)
 
+            t0 = time.perf_counter()
+            
             solver.solve_for_x0(x, False, False)
+            
+            t1 = (time.perf_counter()-t0)*10
+            if(t1 > tmax):
+                tmax = t1
+            if(t1 < tmin ):
+                tmin = t1
+            
+            ttot = 1 + ttot
+
             x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
             u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
 
@@ -1051,11 +1065,13 @@ def run_mpc(model, params):
 
             if len(obsCenters) > 0:
                 discObsPoints = obsCenters - x_next[:3]
-                x_min, x_max, y_min, y_max, z_min, z_max, _ , _ , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
+                x_min, x_max, y_min, y_max, z_min, z_max, _ , alloutside , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
 
-            box = np.array([x_min + x_next[0], x_max + x_next[0], 
-                            y_min + x_next[1], y_max + x_next[1], 
-                            z_min + x_next[2], z_max + x_next[2]])
+                if alloutside:
+                    box = np.array([x_min + x_next[0], x_max + x_next[0], 
+                                    y_min + x_next[1], y_max + x_next[1], 
+                                    z_min + x_next[2], z_max + x_next[2]])
+                    
             rollback_guess(solver, model, params, x_next, p_current=box)
 
             x = x_next.copy()
@@ -1065,6 +1081,8 @@ def run_mpc(model, params):
             ug.append(u_sol[0])
             xg.append(x_next.copy())
             bg.append(box.copy())
+
+        print(f"Avarage time for each iteration: {ttot/i:.2f} ms, max: {tmax:.2f} ms, min: {tmin:.2f}")
 
         if follow_safe_abort:
 
