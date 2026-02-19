@@ -701,12 +701,12 @@ def min_cube_select(Q=None, R=None, goal_point=None, drone_radius=0.5):
     xOpt = box
     exitflag = 1 if not np.any(_spheres_intersect_box(Q, R, box, tol)) else 0
 
-    inside = (
-        (Q[:, 0] - R >= xOpt[0]) & (Q[:, 0] + R <= xOpt[1]) &
-        (Q[:, 1] - R >= xOpt[2]) & (Q[:, 1] + R <= xOpt[3]) &
-        (Q[:, 2] - R >= xOpt[4]) & (Q[:, 2] + R <= xOpt[5])
-    )
-    all_outside = not np.any(inside)
+    # inside = (
+    #     (Q[:, 0] - R >= xOpt[0]) & (Q[:, 0] + R <= xOpt[1]) &
+    #     (Q[:, 1] - R >= xOpt[2]) & (Q[:, 1] + R <= xOpt[3]) &
+    #     (Q[:, 2] - R >= xOpt[4]) & (Q[:, 2] + R <= xOpt[5])
+    # )
+    # all_outside = not np.any(inside)
 
     if goal_point is not None:
         goal_included = (
@@ -721,7 +721,7 @@ def min_cube_select(Q=None, R=None, goal_point=None, drone_radius=0.5):
         xOpt[0], xOpt[1],
         xOpt[2], xOpt[3],
         xOpt[4], xOpt[5],
-        exitflag, all_outside,
+        exitflag,
         goal_included
     )
 
@@ -961,9 +961,8 @@ def run_mpc(model, params):
         # Calculate initial box
         if len(obsCenters) > 0:
             discObsPoints = obsCenters - x[:3]
-            x_min, x_max, y_min, y_max, z_min, z_max, exitflag , alloutside , goalinside = min_cube_select(discObsPoints, obsRadii,drone_radius=params.maxRad)
-            
-            # if alloutside:
+            x_min, x_max, y_min, y_max, z_min, z_max, _ , _ = min_cube_select(discObsPoints, obsRadii,drone_radius=params.maxRad)
+
             box = np.array([x_min + x[0], x_max + x[0], 
                             y_min + x[1], y_max + x[1], 
                             z_min + x[2], z_max + x[2]])
@@ -1065,9 +1064,9 @@ def run_mpc(model, params):
 
             if len(obsCenters) > 0:
                 discObsPoints = obsCenters - x_next[:3]
-                x_min, x_max, y_min, y_max, z_min, z_max, _ , alloutside , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
+                x_min, x_max, y_min, y_max, z_min, z_max, feasible , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
 
-                if alloutside:
+                if feasible:
                     box = np.array([x_min + x_next[0], x_max + x_next[0], 
                                     y_min + x_next[1], y_max + x_next[1], 
                                     z_min + x_next[2], z_max + x_next[2]])
