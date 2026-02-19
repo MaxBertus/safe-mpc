@@ -1,19 +1,21 @@
-from xml.parsers.expat import model
+import os
+import copy
+import ctypes
+import pickle
+import time
+
 import numpy as np
-from scipy.optimize import minimize
-import casadi as ca
 import torch
 import torch.nn as nn
-import copy
-import l4casadi as l4c
+from scipy.optimize import minimize
+from tqdm import tqdm
+import casadi as ca
 from casadi import MX, vertcat, horzcat, sin, cos, tan, cross, fmin, fmax
+import l4casadi as l4c
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver, AcadosSim, AcadosSimSolver
+
 from safe_mpc import ocp
 from utils.plotter import plotter
-import os
-import pickle
-import ctypes
-from tqdm import tqdm
 
 # =========================================================
 # PARAMETERS
@@ -58,16 +60,18 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([1.5, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            #{"center": np.array([1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            #{"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            #{"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.25, "type": "sphere"},    
+            {"center": np.array([2.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            # {"center": np.array([1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"},    
+            # {"center": np.array([-1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"}, 
+            # {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.5, "type": "sphere"},                         
         ]
         
         # Room dimensions
@@ -531,7 +535,6 @@ def define_ocpSafeAbort(model, params):
 
     return ocp
 
-
 # =========================================================
 # NEURAL NETWORK DEFINITION
 # =========================================================
@@ -636,111 +639,80 @@ class NetSafeSet():
 # BOX CONSTRAINTS DEFINITION
 # =========================================================
 
-def min_cube_select(params, Q, R=None, goal_point=None):
+def min_cube_select(Q=None, R=None, goal_point=None, drone_radius=0.5):
     """
-    Python equivalent of the MATLAB function minCubeSelect.
-    
-    Parameters
-    ----------
-    Q : ndarray, shape (N, 3)
-        Centers of the spheres.
-    R : ndarray, shape (N,)
-        Radii of the spheres.
-    goal_point : ndarray, shape (3,), optional
-        Point that must be included in the box.
-    
-    Returns
-    -------
-    xMin, xMax, yMin, yMax, zMin, zMax : float
-        Bounds of the optimal box.
-    exitflag : int
-        Optimization success flag (1 = success, 0 = failure).
-    all_outside : bool
-        Whether all spheres are outside the box.
-    goal_included : bool
-        Whether the goal point is included in the box (if provided).
-    """
+    Fast closed-form version of min_cube_select.
+    Builds the largest axis-aligned box centered at the origin
+    that avoids all spheres, using a greedy half-space intersection approach.
 
+    Strategy:
+        - Start from the maximum allowed box [-2,2]^3
+        - For each sphere that intersects the current box,
+          shrink the nearest face to push the sphere outside
+        - Iterate until no sphere intersects or no improvement is possible
+    """
     if R is None:
         R = np.zeros(Q.shape[0])
 
-    # Initial guess adjusted to include goal point if provided
+    # Hard limits from bounds
+    LIMIT = 2.0
+
+    # Initialize box to maximum extent
+    box = np.array([-LIMIT, LIMIT, -LIMIT, LIMIT, -LIMIT, LIMIT], dtype=float)
+
+    # Enforce drone occupancy from the start
+    box[0] = min(box[0], -drone_radius)
+    box[1] = max(box[1],  drone_radius)
+    box[2] = min(box[2], -drone_radius)
+    box[3] = max(box[3],  drone_radius)
+    box[4] = min(box[4], -drone_radius)
+    box[5] = max(box[5],  drone_radius)
+
+    # Enforce goal point inclusion
     if goal_point is not None:
-        # Start with a box that includes the goal point
-        margin = 0.1
-        x0 = np.array([
-            min(-params.maxRad, goal_point[0] - margin),
-            max(params.maxRad, goal_point[0] + margin),
-            min(-params.maxRad, goal_point[1] - margin),
-            max(params.maxRad, goal_point[1] + margin),
-            min(-params.maxRad, goal_point[2] - margin),
-            max(params.maxRad, goal_point[2] + margin)
-        ])
-    else:
-        x0 = np.array([-params.maxRad, params.maxRad, -params.maxRad, params.maxRad, -params.maxRad, params.maxRad])
+        box[0] = min(box[0], goal_point[0])
+        box[1] = max(box[1], goal_point[0])
+        box[2] = min(box[2], goal_point[1])
+        box[3] = max(box[3], goal_point[1])
+        box[4] = min(box[4], goal_point[2])
+        box[5] = max(box[5], goal_point[2])
 
-    # Bounds (origin must be inside)
-    bounds = [
-        (-2.0, 0.0),   # xMin
-        (0.0, 2.0),    # xMax
-        (-2.0, 0.0),   # yMin
-        (0.0, 2.0),    # yMax
-        (-2.0, 0.0),   # zMin
-        (0.0, 2.0)     # zMax
-    ]
+    max_iter = 50
+    tol = 1e-9
 
-    # Objective: maximize volume -> minimize negative volume
-    def objective(x):
-        return -box_volume(x)
-    
-    # Constraints list
-    constraints_list = []
+    for _ in range(max_iter):
+        moved = False
 
-    # Nonlinear inequality constraints (c(x) >= 0)
-    constraints_list.append({
-        "type": "ineq",
-        "fun": lambda x: sphere_box_constraints(x, Q, R)
-    })
+        # Vectorized: find spheres intersecting the box
+        intersecting = _spheres_intersect_box(Q, R, box, tol)
+        if not np.any(intersecting):
+            break
 
-    # Nonlinear inequality constraints (c(x) >= 0)
-    constraints_list.append({
-        "type": "ineq",
-        "fun": lambda x: drone_occupancy(x, params.maxRad)
-    })
+        Qi = Q[intersecting]
+        Ri = R[intersecting]
 
-    # Goal point constraint (if provided)
-    if goal_point is not None:
-        eps = 1e-3
-        constraints_list.append({
-            "type": "ineq",
-            "fun": lambda x: np.array([
-                goal_point[0] - x[0] - eps,  # goal_x >= xMin
-                x[1] - goal_point[0] - eps,  # goal_x <= xMax
-                goal_point[1] - x[2] - eps,  # goal_y >= yMin
-                x[3] - goal_point[1] - eps,  # goal_y <= yMax
-                goal_point[2] - x[4] - eps,  # goal_z >= zMin
-                x[5] - goal_point[2] - eps   # goal_z <= zMax
-            ])
-        })
+        # For each intersecting sphere, find which face to push
+        # and by how much — pick the face that maximizes volume retention
+        box, moved = _push_faces(box, Qi, Ri, drone_radius, goal_point)
 
-    # Solve optimization
-    result = minimize(
-        objective,
-        x0,
-        method="trust-constr",
-        bounds=bounds,
-        constraints=constraints_list,
-        options={"verbose": 0}
+        if not moved:
+            break
+
+    xOpt = box
+    exitflag = 1 if not np.any(_spheres_intersect_box(Q, R, box, tol)) else 0
+
+    inside = (
+        (Q[:, 0] - R >= xOpt[0]) & (Q[:, 0] + R <= xOpt[1]) &
+        (Q[:, 1] - R >= xOpt[2]) & (Q[:, 1] + R <= xOpt[3]) &
+        (Q[:, 2] - R >= xOpt[4]) & (Q[:, 2] + R <= xOpt[5])
     )
-
-    xOpt = result.x
-    exitflag = int(result.success)
+    all_outside = not np.any(inside)
 
     if goal_point is not None:
         goal_included = (
-            (xOpt[0] <= goal_point[0] <= xOpt[1]) and
-            (xOpt[2] <= goal_point[1] <= xOpt[3]) and
-            (xOpt[4] <= goal_point[2] <= xOpt[5])
+            xOpt[0] <= goal_point[0] <= xOpt[1] and
+            xOpt[2] <= goal_point[1] <= xOpt[3] and
+            xOpt[4] <= goal_point[2] <= xOpt[5]
         )
     else:
         goal_included = True
@@ -749,73 +721,118 @@ def min_cube_select(params, Q, R=None, goal_point=None):
         xOpt[0], xOpt[1],
         xOpt[2], xOpt[3],
         xOpt[4], xOpt[5],
-        exitflag,
+        exitflag, all_outside,
         goal_included
     )
 
-def box_volume(x):
+def _spheres_intersect_box(Q, R, box, tol=1e-9):
     """
-    Compute volume of the box.
+    Vectorized check: returns boolean mask of spheres intersecting the box.
+    A sphere intersects if its closest point to the box is within radius R.
     """
-    dx = x[1] - x[0]
-    dy = x[3] - x[2]
-    dz = x[5] - x[4]
-    return dx * dy * dz
+    xMin, xMax, yMin, yMax, zMin, zMax = box
 
-def drone_occupancy(x, drone_radius):
+    # Closest point on box to each sphere center (vectorized)
+    cx = np.clip(Q[:, 0], xMin, xMax)
+    cy = np.clip(Q[:, 1], yMin, yMax)
+    cz = np.clip(Q[:, 2], zMin, zMax)
+
+    dist2 = (Q[:, 0] - cx)**2 + (Q[:, 1] - cy)**2 + (Q[:, 2] - cz)**2
+    return dist2 < (R**2 - tol)
+
+def _push_faces(box, Qi, Ri, drone_radius, goal_point):
     """
-    Inequality constraints ensuring the box can contain a sphere
-    of radius 0.5 centered at the origin.
-    
-    Since xMin, yMin, zMin are always negative (from bounds),
-    we ensure they are <= -0.5, and xMax, yMax, zMax are >= 0.5.
-    
-    Returns c such that c >= 0 (for scipy 'ineq' constraint).
+    For each intersecting sphere, compute the volume-preserving best face push.
+    Returns updated box and whether any face was actually moved.
     """
-    xMin, xMax, yMin, yMax, zMin, zMax = x
-    
-    eps = 1e-6  # small tolerance for numerical stability
-    
-    # Since mins are negative: xMin <= -drone_radius means -xMin >= drone_radius
-    # Since maxs are positive: xMax >= drone_radius
-    c = np.array([
-        -xMin - drone_radius + eps,  # -xMin >= drone_radius (since xMin < 0)
-        xMax - drone_radius + eps,   # xMax >= drone_radius
-        -yMin - drone_radius + eps,  # -yMin >= drone_radius (since yMin < 0)
-        yMax - drone_radius + eps,   # yMax >= drone_radius
-        -zMin - drone_radius + eps,  # -zMin >= drone_radius (since zMin < 0)
-        zMax - drone_radius + eps    # zMax >= drone_radius
-    ])
-    
-    return c
+    xMin, xMax, yMin, yMax, zMin, zMax = box
+    moved = False
 
-def sphere_box_constraints(x, Q, R):
-    """
-    Inequality constraints enforcing that each sphere
-    does not intersect the box.
-    
-    Returns c such that c <= 0.
-    """
+    for i in range(len(Qi)):
+        cx, cy, cz = Qi[i]
+        r = Ri[i]
 
-    xMin, xMax, yMin, yMax, zMin, zMax = x
+        # Volume of box before push
+        vol_before = (xMax - xMin) * (yMax - yMin) * (zMax - zMin)
 
-    N = Q.shape[0]
-    c = np.zeros(N)
+        # Candidate new face positions to exclude this sphere
+        # For each face, compute the new position and resulting volume
+        candidates = []
 
-    for i in range(N):
-        cx, cy, cz = Q[i]
-        r = R[i]
+        # Push xMin right (shrink from left): new xMin = cx + r + eps
+        new_xMin = cx + r + 1e-4
+        if new_xMin <= 0 and new_xMin >= -2.0:  # must stay in bounds
+            vol = (xMax - new_xMin) * (yMax - yMin) * (zMax - zMin)
+            candidates.append(('xMin', new_xMin, vol))
 
-        dx = max(xMin - cx, 0.0, cx - xMax)
-        dy = max(yMin - cy, 0.0, cy - yMax)
-        dz = max(zMin - cz, 0.0, cz - zMax)
+        # Push xMax left (shrink from right): new xMax = cx - r - eps
+        new_xMax = cx - r - 1e-4
+        if new_xMax >= 0 and new_xMax <= 2.0:
+            vol = (new_xMax - xMin) * (yMax - yMin) * (zMax - zMin)
+            candidates.append(('xMax', new_xMax, vol))
 
-        dist2 = dx**2 + dy**2 + dz**2
+        # Push yMin up
+        new_yMin = cy + r + 1e-4
+        if new_yMin <= 0 and new_yMin >= -2.0:
+            vol = (xMax - xMin) * (yMax - new_yMin) * (zMax - zMin)
+            candidates.append(('yMin', new_yMin, vol))
 
-        # inequality: dist^2 >= 0 
-        c[i] = -r**2 + dist2 - 1e-3
+        # Push yMax down
+        new_yMax = cy - r - 1e-4
+        if new_yMax >= 0 and new_yMax <= 2.0:
+            vol = (xMax - xMin) * (new_yMax - yMin) * (zMax - zMin)
+            candidates.append(('yMax', new_yMax, vol))
 
-    return c
+        # Push zMin up
+        new_zMin = cz + r + 1e-4
+        if new_zMin <= 0 and new_zMin >= -2.0:
+            vol = (xMax - xMin) * (yMax - yMin) * (zMax - new_zMin)
+            candidates.append(('zMin', new_zMin, vol))
+
+        # Push zMax down
+        new_zMax = cz - r - 1e-4
+        if new_zMax >= 0 and new_zMax <= 2.0:
+            vol = (xMax - xMin) * (yMax - yMin) * (new_zMax - zMin)
+            candidates.append(('zMax', new_zMax, vol))
+
+        if not candidates:
+            continue
+
+        # Pick the face move that retains the most volume
+        best = max(candidates, key=lambda c: c[2])
+
+        # Apply only if it doesn't violate drone occupancy or goal constraints
+        face, val, vol = best
+        new_box = np.array([xMin, xMax, yMin, yMax, zMin, zMax])
+
+        face_idx = {'xMin': 0, 'xMax': 1, 'yMin': 2, 'yMax': 3, 'zMin': 4, 'zMax': 5}
+        new_box[face_idx[face]] = val
+
+        if not _violates_constraints(new_box, drone_radius, goal_point):
+            xMin, xMax, yMin, yMax, zMin, zMax = new_box
+            box = new_box
+            moved = True
+
+    return box, moved
+
+def _violates_constraints(box, drone_radius, goal_point):
+    """Check drone occupancy and goal point constraints."""
+    xMin, xMax, yMin, yMax, zMin, zMax = box
+
+    # Drone occupancy: box must contain sphere of radius drone_radius at origin
+    if (-xMin < drone_radius or xMax < drone_radius or
+            -yMin < drone_radius or yMax < drone_radius or
+            -zMin < drone_radius or zMax < drone_radius):
+        return True
+
+    # Goal point must be inside box
+    if goal_point is not None:
+        if not (xMin <= goal_point[0] <= xMax and
+                yMin <= goal_point[1] <= yMax and
+                zMin <= goal_point[2] <= zMax):
+            return True
+
+    return False
 
 def discretize_box_surface(center, dims, step):
     """
@@ -901,11 +918,13 @@ def run_mpc(model, params):
         elif obs['type'] == 'box':
             discObs = discretize_box_surface(obs['center'], obs['dimensions'], params.maxRad)
             obsCenters.append(discObs)
-            obsRadii.append(np.full(discObs.shape[0], 0.0))
+            obsRadii.append(np.full(discObs.shape[0], 0.01))
     
     if len(obsCenters) > 0:
-        if len(obsCenters) > 1:
-            obsCenters = np.vstack(obsCenters)
+        obsCenters = np.vstack(obsCenters)
+        if obs['type'] == 'sphere':
+            obsRadii = np.array(obsRadii)
+        elif obs['type'] == 'box':
             obsRadii = np.concatenate(obsRadii)
     else:
         obsCenters = np.empty((0, 3))
@@ -941,8 +960,10 @@ def run_mpc(model, params):
 
         # Calculate initial box
         if len(obsCenters) > 0:
-            Q = obsCenters - x[:3]
-            x_min, x_max, y_min, y_max, z_min, z_max, _ , _ = min_cube_select(params, Q, obsRadii)
+            discObsPoints = obsCenters - x[:3]
+            x_min, x_max, y_min, y_max, z_min, z_max, exitflag , alloutside , goalinside = min_cube_select(discObsPoints, obsRadii,drone_radius=params.maxRad)
+            
+            # if alloutside:
             box = np.array([x_min + x[0], x_max + x[0], 
                             y_min + x[1], y_max + x[1], 
                             z_min + x[2], z_max + x[2]])
@@ -1014,9 +1035,9 @@ def run_mpc(model, params):
                         p_guess=box
                     )
 
-                    solverSafeAbort.solve_for_x0( x_prev[params.N-1,:] , False, False) # Why N-1?
+                    solverSafeAbort.solve_for_x0( x_prev[params.N-1,:] , False, False)
                 
-                elif fails == params.N-1:
+                elif fails == params.N-1: 
                     actualTime = i*params.dt
                     print(f"ATTENTION: MPC infeasibility persists. Following safe abort strategy at {actualTime}")
                     follow_safe_abort = True
@@ -1029,11 +1050,12 @@ def run_mpc(model, params):
             x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
 
             if len(obsCenters) > 0:
-                Q = obsCenters - x_next[:3]
-                x_min, x_max, y_min, y_max, z_min, z_max, _ , _ = min_cube_select(params, Q, obsRadii)
-                box = np.array([x_min + x_next[0], x_max + x_next[0], 
-                                y_min + x_next[1], y_max + x_next[1], 
-                                z_min + x_next[2], z_max + x_next[2]])
+                discObsPoints = obsCenters - x_next[:3]
+                x_min, x_max, y_min, y_max, z_min, z_max, _ , _ , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
+
+            box = np.array([x_min + x_next[0], x_max + x_next[0], 
+                            y_min + x_next[1], y_max + x_next[1], 
+                            z_min + x_next[2], z_max + x_next[2]])
             rollback_guess(solver, model, params, x_next, p_current=box)
 
             x = x_next.copy()

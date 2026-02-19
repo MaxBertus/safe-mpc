@@ -1,12 +1,18 @@
+import time
+
 import numpy as np
 import matplotlib.pyplot as plt
-from minCubeSelect import min_cube_select
+from tqdm import tqdm
+
+from minCubeSelect import min_cube_select, min_cube_select_fast
 from plot_cube import plot_cube
 
-def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8, seed=None):
+def generate_random_boxes(n_boxes, inner_half=0.8, outer_half=2.0, max_size=0.8,
+                          seed=None, max_attempts=1000):
     """
-    Generate random axis-aligned boxes outside a small cube and inside a large cube.
-    
+    Generate random axis-aligned boxes outside a small cube and inside a large cube,
+    with no mutual intersections.
+
     Parameters
     ----------
     n_boxes : int
@@ -19,39 +25,63 @@ def generate_random_boxes(n_boxes, inner_half=0.5, outer_half=2.0, max_size=0.8,
         Maximum half-dimension of boxes.
     seed : int
         Random seed.
-        
+    max_attempts : int
+        Maximum placement attempts per box before giving up.
+
     Returns
     -------
     centers : ndarray (n_boxes, 3)
     half_dims : ndarray (n_boxes, 3)
+
+    Raises
+    ------
+    RuntimeError
+        If a box cannot be placed without intersections within max_attempts tries.
     """
     if seed is not None:
         np.random.seed(seed)
-    
+
     centers = np.zeros((n_boxes, 3))
     half_dims = np.zeros((n_boxes, 3))
-    
-    for i in range(n_boxes):
-        for j in range(3):  # x, y, z
-            # Half-dimension random
-            hd = np.random.uniform(0.05, max_size)
-            half_dims[i, j] = hd
-            
-            # Decide whether to place box below or above inner cube
-            if np.random.rand() < 0.5:
-                # Below inner cube
-                min_c = -outer_half + hd
-                max_c = -inner_half - hd
-            else:
-                # Above inner cube
-                min_c = inner_half + hd
-                max_c = outer_half - hd
-            
-            centers[i, j] = np.random.uniform(min_c, max_c)
-            
-    return centers, half_dims
 
-import numpy as np
+    def overlaps_any(c, hd, placed_count):
+        """Return True if box (c, hd) intersects any already-placed box."""
+        if placed_count == 0:
+            return False
+        prev_c  = centers[:placed_count]   # (placed_count, 3)
+        prev_hd = half_dims[:placed_count] # (placed_count, 3)
+        # Separation on each axis: |c - prev_c| >= hd + prev_hd means no overlap on that axis
+        separations = np.abs(c - prev_c) - (hd + prev_hd)  # (placed_count, 3)
+        # Two AABBs do NOT intersect if at least one axis has separation >= 0
+        no_overlap = np.any(separations >= 0.0, axis=1)  # (placed_count,)
+        return not np.all(no_overlap)
+
+    def sample_box():
+        """Sample a random box that respects the inner/outer cube constraints."""
+        hd = np.random.uniform(0.05, max_size, size=3)
+        c  = np.empty(3)
+        for j in range(3):
+            if np.random.rand() < 0.5:
+                lo, hi = -outer_half + hd[j], -inner_half - hd[j]
+            else:
+                lo, hi = inner_half + hd[j],  outer_half - hd[j]
+            c[j] = np.random.uniform(lo, hi)
+        return c, hd
+
+    for i in range(n_boxes):
+        for attempt in range(max_attempts):
+            c, hd = sample_box()
+            if not overlaps_any(c, hd, i):
+                centers[i]   = c
+                half_dims[i] = hd
+                break
+        else:
+            raise RuntimeError(
+                f"Could not place box {i} without intersections after "
+                f"{max_attempts} attempts. Try fewer boxes or a larger outer_half."
+            )
+
+    return centers, half_dims
 
 def discretize_box_surface(center, half_dims, step):
     """
@@ -142,25 +172,21 @@ def discretize_boxes_surfaces(centers, half_dims, step):
 if __name__ == "__main__":
 
     counter = 0
-    for r in range(1, 10):
+    t0 = time.perf_counter()
+    for r in tqdm(range(500), desc="Box searching"): 
 
         Q, D = generate_random_boxes(5, seed=r)
 
         points = discretize_boxes_surfaces(Q, D, 1.0)
 
         # Solve optimization problem
-        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check, _ = min_cube_select(points)
+        x_min, x_max, y_min, y_max, z_min, z_max, exitflag, check, _ = min_cube_select_fast(points, R=np.full(points.shape[0],0.01))
 
-        # if exitflag <= 0:
-        #     print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check}")
-        #     counter += 1
-        #     continue
+        if exitflag <= 0:
+            print(f"Warning: Optimization failed at iteration {r}, so it fails {counter+1} times. Check={check}")
+            counter += 1
         # else:
         #     print(f"Iteration {r}: Cube found with volume {(x_max-x_min)*(y_max-y_min)*(z_max-z_min)} and check={check}")
-
-        if not check:
-            print(f"Warning: Optimization failed at iteration {r}, so it fails {counter} times. Check={check}")
-            counter += 1
 
         # Visualize
         plot_cube(
@@ -172,3 +198,5 @@ if __name__ == "__main__":
             points=points,
             plotter=r
         )
+
+print(f"Fast: {(time.perf_counter()-t0)*10:.2f} ms/call")
