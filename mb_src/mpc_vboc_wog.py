@@ -60,15 +60,15 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([2.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            {"center": np.array([2.0, 0.0, -0.5]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([-1.5, 0.0, 0.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 2.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([2.0, 0.0, 0.5]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
             # {"center": np.array([1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"},    
             # {"center": np.array([-1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"}, 
             # {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.5, "type": "sphere"},                         
