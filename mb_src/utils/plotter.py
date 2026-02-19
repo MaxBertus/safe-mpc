@@ -43,8 +43,8 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     uHistory = uHistory[:, :]       # (N, 6)
 
     # Define time array
-    time = np.arange(0, N * params.dt, params.dt)
-    
+    time = np.arange(N) * params.dt
+
     # Define state and input references
     x_ref = params.x_ref
     if params.use_u_ref_hovering:
@@ -64,6 +64,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     labels = ["x", "y", "z", "roll", "pitch", "yaw"]
     ylabels = ["pos [m]", "pos [m]", "pos [m]",
             "angle [deg]", "angle [deg]", "angle [deg]"]
+
 
     for i, ax in enumerate(axs.flat):
         if i < 3:
