@@ -60,15 +60,15 @@ class Params:
         self.time = np.arange(0, self.SimDuration, self.dt)
 
         # *** REFERENCE STATE ***
-        self.x_ref = np.array([2.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.x_ref = np.array([2.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.use_u_ref_hovering = True
 
         # *** ENVIRONMENT PARAMETERS ***
         # Obstacles
         self.obstacles = [
-            {"center": np.array([2.0, 0.0, 0.5]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
-            {"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([0.5, 0.5, 0.5]), "type": "box"},
+            {"center": np.array([2.0, 0.0, 0.5]), "dimensions": np.array([0.5, 2.0, 2.0]), "type": "box"},
+            {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 3.0, 3.0]), "type": "box"},
+            {"center": np.array([0.0, 0.0, 3.0]), "dimensions": np.array([2.0, 2.0, 0.5]), "type": "box"},
             # {"center": np.array([1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"},    
             # {"center": np.array([-1.5, 0.0, 0.5]), "radius": 0.5, "type": "sphere"}, 
             # {"center": np.array([0.0, 0.0, 3.5]), "radius": 0.5, "type": "sphere"},                         
@@ -77,7 +77,7 @@ class Params:
         # Room dimensions
         self.xlim = [-3.0, 3.0]
         self.ylim = [-3.0, 3.0] 
-        self.zlim = [-3.0, 3.0]
+        self.zlim = [-3.0, 5.0]
 
         # *** NEURAL NETWORK PARAMETERS ***
         self.input_size = 15 # 6 box dimensions + 3 orientations + 3 linear velocities + 3 angular velocities = 15
