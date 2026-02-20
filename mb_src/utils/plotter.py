@@ -57,8 +57,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     rad2deg = lambda x: x * 180.0 / np.pi
 
-    save_dir = params.plots_dir
-    os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(params.plots_dir, exist_ok=True)
 
     def refine_time_axis(ax):
         ax.set_xlim([0, time[-1]+params.dt])
@@ -91,7 +90,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax.grid(True)
         ax.legend(["reference", "actual"])
 
-    fig.savefig(os.path.join(save_dir, "states_part1.pdf"),
+    fig.savefig(os.path.join(params.plots_dir, "states_part1.pdf"),
                 format="pdf", bbox_inches="tight")
 
     # --- single ---
@@ -110,7 +109,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         refine_time_axis(ax_s)
         ax_s.grid(True)
 
-        fig_s.savefig(os.path.join(save_dir, f"state_{i+1}.pdf"),
+        fig_s.savefig(os.path.join(params.plots_dir, f"state_{i+1}.pdf"),
                       format="pdf", bbox_inches="tight")
         plt.close(fig_s)
 
@@ -142,7 +141,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax.grid(True)
         ax.legend(["reference", "actual"])
 
-    fig.savefig(os.path.join(save_dir, "states_part2.pdf"),
+    fig.savefig(os.path.join(params.plots_dir, "states_part2.pdf"),
                 format="pdf", bbox_inches="tight")
 
     for i in range(6):
@@ -161,7 +160,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         refine_time_axis(ax_s)
         ax_s.grid(True)
 
-        fig_s.savefig(os.path.join(save_dir, f"state_{i+7}.pdf"),
+        fig_s.savefig(os.path.join(params.plots_dir, f"state_{i+7}.pdf"),
                       format="pdf", bbox_inches="tight")
         plt.close(fig_s)
 
@@ -184,7 +183,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         refine_time_axis(ax)
         ax.grid(True)
 
-    fig.savefig(os.path.join(save_dir, "inputs.pdf"),
+    fig.savefig(os.path.join(params.plots_dir, "inputs.pdf"),
                 format="pdf", bbox_inches="tight")
 
     for i in range(6):
@@ -201,7 +200,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         refine_time_axis(ax_s)
         ax_s.grid(True)
 
-        fig_s.savefig(os.path.join(save_dir, f"input_{i+1}.pdf"),
+        fig_s.savefig(os.path.join(params.plots_dir, f"input_{i+1}.pdf"),
                       format="pdf", bbox_inches="tight")
         plt.close(fig_s)
 
@@ -233,7 +232,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         refine_time_axis(axs[1, i])
         axs[1, i].grid(True)
 
-    fig.savefig(os.path.join(save_dir, "wrench.pdf"),
+    fig.savefig(os.path.join(params.plots_dir, "wrench.pdf"),
                 format="pdf", bbox_inches="tight")
 
     for i in range(3):
@@ -245,7 +244,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax_f.set_xlabel(r"$t$ [s]")
         refine_time_axis(ax_f)
         ax_f.grid(True)
-        fig_f.savefig(os.path.join(save_dir, f"force_{i+1}.pdf"),
+        fig_f.savefig(os.path.join(params.plots_dir, f"force_{i+1}.pdf"),
                       format="pdf", bbox_inches="tight")
         plt.close(fig_f)
 
@@ -256,7 +255,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax_t.set_xlabel(r"$t$ [s]")
         refine_time_axis(ax_t)
         ax_t.grid(True)
-        fig_t.savefig(os.path.join(save_dir, f"torque_{i+1}.pdf"),
+        fig_t.savefig(os.path.join(params.plots_dir, f"torque_{i+1}.pdf"),
                       format="pdf", bbox_inches="tight")
         plt.close(fig_t)
 
