@@ -94,6 +94,9 @@ class Params:
         else:
             self.device = torch.device('cpu')
 
+        # *** PLOTS ***
+        self.plots_dir =  os.path.join(os.path.dirname(os.path.abspath(__file__)), f"plots")
+
 # =========================================================
 # MODEL GENERATION
 # =========================================================
