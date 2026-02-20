@@ -54,7 +54,7 @@ class Params:
         # *** SIMULATION PARAMETERS ***
         self.SimDuration = 5.0  
         self.dt = 0.02
-        self.dtSim = 0.0001
+        self.dtSim = 1e-4
         self.nsub = int( self.dt / self.dtSim )  # Number of simulation steps for each control steps
         self.T = int(self.SimDuration / self.dt)
         self.time = np.arange(0, self.SimDuration, self.dt)
@@ -472,7 +472,7 @@ def define_ocpSafeAbort(model, params):
     R = params.R                # nu x nu input weight matrix
 
     W = np.zeros((ny, ny))
-    W[0:nv, 0:nv] = Qv
+    W[:nv, :nv] = Qv
     W[nv:, nv:] = R
 
     ocp.cost.W = W
@@ -987,6 +987,7 @@ def run_mpc(model, params):
 
         fails = 0 
         follow_safe_abort = False
+        u_safe_abort = None
         ttot = 0.0
         tmax = 0.0
         tmin = params.dt * 10
@@ -1025,16 +1026,20 @@ def run_mpc(model, params):
 
             if feas == 0:
                 fails = 0
+                u_to_apply = u_sol[0]
+                x_prev = x_sol.copy()
+                u_prev = u_sol.copy()
             else:
                 if fails == 0:
                     print("Alert: MPC infeasibility detected.")
 
+                    x_safe_start = x_prev[params.N, :]
                     u_hover = np.linalg.pinv(
-                        model.R(x_prev[params.N,:]).full() @ model.F
-                    ) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
+                                model.R(x_safe_start).full() @ model.F
+                            ) @ np.array([0, 0, params.mass * params.g]) / params.u_bar
 
                     # Initialize guess for safe abort
-                    x_guess_abort = np.tile(x_prev[params.N,:], (params.Nvboc + 1, 1))
+                    x_guess_abort = np.tile(x_safe_start, (params.Nvboc + 1, 1))
                     u_guess_abort = np.tile(u_hover, (params.Nvboc, 1))
 
                     initialize_guess(
@@ -1042,42 +1047,52 @@ def run_mpc(model, params):
                         params.Nvboc,
                         model,
                         params,
-                        x,
+                        x_safe_start,
                         u_guess=u_guess_abort,
                         x_guess=x_guess_abort,
                         p_guess=box
                     )
 
-                    solverSafeAbort.solve_for_x0( x_prev[params.N-1,:] , False, False)
+                    solverSafeAbort.solve_for_x0( x_safe_start , False, False)
+                    u_safe_abort = np.array([
+                        solverSafeAbort.get(k, "u") for k in range(params.Nvboc)
+                    ])
                 
-                elif fails == params.N-1: 
-                    actualTime = i*params.dt
-                    print(f"ATTENTION: MPC infeasibility persists. Following safe abort strategy at {actualTime}")
+                if fails == params.N:
+                    print(f"Switching to safe abort trajectory at t={i*params.dt:.2f}s")
                     follow_safe_abort = True
                     break
                     
-                fails = fails + 1
-                x_sol = x_prev.copy()
-                u_sol = u_prev.copy()
+                u_to_apply = u_prev[fails]
+                fails += 1
                     
-            x_next = dynamicsSim(sim_solver, x, u_sol[0], params.nsub)
+            x_next = dynamicsSim(sim_solver, x, u_to_apply, params.nsub)
 
             if len(obsCenters) > 0:
                 discObsPoints = obsCenters - x_next[:3]
-                x_min, x_max, y_min, y_max, z_min, z_max, feasible , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
+                x_min, x_max, y_min, y_max, z_min, z_max, boxFeasible , _ = min_cube_select(discObsPoints, obsRadii, drone_radius=params.maxRad)
 
-                if feasible:
+                if boxFeasible:
                     box = np.array([x_min + x_next[0], x_max + x_next[0], 
                                     y_min + x_next[1], y_max + x_next[1], 
                                     z_min + x_next[2], z_max + x_next[2]])
-                    
-            rollback_guess(solver, model, params, x_next, p_current=box)
+
+            if feas == 0:
+                rollback_guess(solver, model, params, x_next, p_current=box)
+            else:
+                # Shift manuale di u_prev/x_prev senza leggere dal solver infeasible
+                u_shifted = np.vstack([u_prev[1:], u_prev[-1]])
+                x_shifted = np.vstack([x_prev[1:], x_prev[-1]])
+                initialize_guess(
+                    solver, params.N, model, params,
+                    x_next,
+                    u_guess=u_shifted,
+                    x_guess=x_shifted,
+                    p_guess=box
+                )
 
             x = x_next.copy()
-            x_prev = x_sol.copy()
-            u_prev = u_sol.copy()
-
-            ug.append(u_sol[0])
+            ug.append(u_to_apply)
             xg.append(x_next.copy())
             bg.append(box.copy())
 
@@ -1085,15 +1100,19 @@ def run_mpc(model, params):
 
         if follow_safe_abort:
 
-            u_sol = np.array([solverSafeAbort.get(k, "u") for k in range(params.Nvboc)])
-            for j in range(0, params.Nvboc):
-                x_next = dynamicsSim(sim_solver, x, u_sol[j], params.nsub)
+            print(f"x_safe_start was: {x_prev[params.N, :]}")
+            print(f"x actual after {fails} fallback steps: {x}")
+            print(f"Difference: {x - x_prev[params.N, :]}")
 
+            input("press to continue")
+
+            for j in range(0, params.Nvboc):
+                x_next = dynamicsSim(sim_solver, x, u_safe_abort[j], params.nsub)
                 x = x_next.copy()
-                ug.append(u_sol[j])
+                ug.append(u_safe_abort[j])
                 xg.append(x_next.copy())
                 bg.append(box.copy())
-        
+                
         xg_all.append(np.asarray(xg))
         ug_all.append(np.asarray(ug))
         bg_all.append(np.asarray(bg))
