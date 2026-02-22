@@ -48,7 +48,7 @@ class Params:
                            1e2, 1e2, 1e2])  # angular velocities
         self.R = 1e0 * np.eye(self.nu)
         self.N = 60
-        self.Nvboc = 50
+        self.Nvboc = 20
         self.nlp_solver_max_iter = 100
 
         # *** SIMULATION PARAMETERS ***
@@ -81,7 +81,7 @@ class Params:
 
         # *** NEURAL NETWORK PARAMETERS ***
         self.input_size = 15 # 6 box dimensions + 3 orientations + 3 linear velocities + 3 angular velocities = 15
-        self.hidden_size = 512
+        self.hidden_size = 1024
         self.output_size = 1
         self.number_hidden = 2
         self.act_fun = torch.nn.GELU(approximate='tanh')
@@ -627,7 +627,7 @@ class NetSafeSet():
         vel_norm = ca.sqrt(ca.dot(x_cp[npos+nori:], x_cp[npos+nori:]) + params.eps**2)
         vel_dir = x_cp[npos+nori:] / (vel_norm) 
 
-        state = ca.vertcat(box, orient, -vel_dir)
+        state = ca.vertcat(box, orient, vel_dir)
 
         self.l4c_model = l4c.L4CasADi(model_net,
                                       device=params.device,
@@ -903,10 +903,9 @@ def discretize_box_surface(center, dims, step):
 
 def run_mpc(model, params):
     '''Compute, apply and simulate MPC control.'''
-    
+
     # *** DEFINE SAFE SET ***
     safe_set = NetSafeSet(model, params)
-
     # result = safe_set.nn_func(np.array([0.0,0.0,0.0, 0.0,0.0,0.0, 1.0,0.0,0.0, 0.0,0.0,0.0]), np.array([-2, 2, -2, 2, -2, 2]))
     # print("NN output at origin with box [-2,2] in all dimensions:", result)
 
