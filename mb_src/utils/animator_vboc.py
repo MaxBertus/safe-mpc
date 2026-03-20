@@ -158,19 +158,19 @@ def animator(pos, angles, box, params,
     ax.view_init(elev=0, azim=-90)
 
     # --- More ticks (one every 0.5 m, adjust to taste) ---
-    tick_spacing = 0.5
+    tick_spacing = 1.0
     ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_spacing))
     ax.yaxis.set_major_locator(ticker.MultipleLocator(tick_spacing))
     ax.zaxis.set_major_locator(ticker.MultipleLocator(tick_spacing))
 
     # --- Tick labels and axis labels ---
-    LABEL_SIZE  = 12   # axis-name font size  (≈2× the previous 6)
-    TICK_SIZE   = 10   # tick number font size (≈2× the previous 5)
+    LABEL_SIZE  = 20   # axis-name font size  (≈2× the previous 6)
+    TICK_SIZE   = 18   # tick number font size (≈2× the previous 5)
 
-    ax.tick_params(axis="x", labelsize=TICK_SIZE, pad=1)
-    ax.tick_params(axis="z", labelsize=TICK_SIZE, pad=8)   # shift z labels leftward
+    ax.tick_params(axis="x", labelsize=TICK_SIZE, pad=2)
+    ax.tick_params(axis="z", labelsize=TICK_SIZE, pad=10)   # shift z labels leftward
 
-    ax.set_xlabel("x [m]", fontsize=LABEL_SIZE, labelpad=2)
+    ax.set_xlabel("x [m]", fontsize=LABEL_SIZE, labelpad=6)
     ax.set_ylabel("",       fontsize=LABEL_SIZE)
     ax.set_zlabel("z [m]", fontsize=LABEL_SIZE, labelpad=16)
 
@@ -203,7 +203,7 @@ def animator(pos, angles, box, params,
         ax.plot([xr[0]], [xr[1]], [xr[2]], "rx", markersize=12, markeredgewidth=2.5)
 
     # --- Smaller time text ---
-    time_text = fig.text(0.52, 0.12, "", ha="center", fontsize=14)
+    time_text = fig.text(0.52, 0.12, "", ha="center", fontsize=16)
 
     # Bounding box
     box_collection, box_array = None, None

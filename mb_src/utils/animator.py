@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from matplotlib.ticker import MultipleLocator
 
 # =========================================================
 # Rotation utilities
@@ -23,7 +24,6 @@ def rotation_matrix(roll, pitch, yaw):
 
     return Rz @ Ry @ Rx
 
-
 def axis_angle_rotation(axis, angle):
     axis = axis / np.linalg.norm(axis)
     K = np.array([
@@ -32,7 +32,6 @@ def axis_angle_rotation(axis, angle):
         [-axis[1], axis[0], 0]
     ])
     return np.eye(3) + np.sin(angle)*K + (1 - np.cos(angle))*(K @ K)
-
 
 def rotor_disc(center, normal, radius=0.08, n_points=40):
     normal = normal / np.linalg.norm(normal)
@@ -60,7 +59,6 @@ def rotor_disc(center, normal, radius=0.08, n_points=40):
     triangles.append([0, n_points, 1])  # ultimo triangolo per chiudere
 
     return x, y, z, triangles
-
 
 # =========================================================
 # Update Function
@@ -167,9 +165,21 @@ def animator(pos, angles, params):
     fig = plt.figure()
     ax = fig.add_subplot(projection="3d")
 
+    ax.set_xlabel("X", fontsize=18)
+    ax.set_ylabel("Y", fontsize=18)
+    ax.set_zlabel("Z", fontsize=18)
+
+    ax.tick_params(axis='x', labelsize=18)
+    ax.tick_params(axis='y', labelsize=18)
+    ax.tick_params(axis='z', labelsize=18)
+
     ax.set_xlim(params.xlim)
     ax.set_ylim(params.ylim)
     ax.set_zlim(params.zlim)
+
+    ax.xaxis.set_major_locator(MultipleLocator(1.0)) 
+    ax.yaxis.set_major_locator(MultipleLocator(1.0))
+    ax.zaxis.set_major_locator(MultipleLocator(1.0))
 
     # Calculate the actual dimensions for each axis
     x_range = params.xlim[1] - params.xlim[0]

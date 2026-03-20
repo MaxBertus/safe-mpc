@@ -1,7 +1,7 @@
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import AutoMinorLocator, MaxNLocator
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator, FormatStrFormatter
 from utils.animator import animator
 from utils.animator_vboc import animator
 from rich.traceback import install
@@ -12,12 +12,15 @@ install(show_locals=True)
 plt.rcParams.update({
     "text.usetex": True,
     "font.family": "serif",
-    "font.size": 14,
-    "xtick.labelsize": 14,
-    "ytick.labelsize": 14,
+    "font.size": 18,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
 })
 
 def plotter(file_path=None, model=None, params=None, animate=False):
+
+    FIG_MULTI = (24, 10)   # grid figures (2x3)
+    FIG_SINGLE = (8, 3)    # individual subplots
 
     actualColor = "#1171BE" # "#3271DF"
     actualWidth = 1.8
@@ -65,12 +68,13 @@ def plotter(file_path=None, model=None, params=None, animate=False):
         ax.xaxis.set_minor_locator(AutoMinorLocator(2))
         ax.tick_params(axis='x', which='major', length=6)
         ax.tick_params(axis='x', which='minor', length=3)
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
     # ==========================================================
     # STATES PART 1
     # ==========================================================
 
-    fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
+    fig, axs = plt.subplots(2, 3, figsize=FIG_MULTI, sharex=True)
 
     labels1 = [r"$x$", r"$y$", r"$z$", r"$\phi$", r"$\theta$", r"$\psi$"]
     units1 = [r"[m]", r"[m]", r"[m]", r"[deg]", r"[deg]", r"[deg]"]
@@ -95,7 +99,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     # --- single ---
     for i in range(6):
-        fig_s, ax_s = plt.subplots(figsize=(8,5))
+        fig_s, ax_s = plt.subplots(figsize=FIG_SINGLE)
 
         if i < 3:
             ax_s.axhline(y=x_ref[i], color='r', linestyle='--')
@@ -117,7 +121,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     # STATES PART 2
     # ==========================================================
 
-    fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
+    fig, axs = plt.subplots(2, 3, figsize=FIG_MULTI, sharex=True)
 
     labels2 = [r"$v_x$", r"$v_y$", r"$v_z$",
                r"$\omega_x$", r"$\omega_y$", r"$\omega_z$"]
@@ -145,7 +149,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
                 format="pdf", bbox_inches="tight")
 
     for i in range(6):
-        fig_s, ax_s = plt.subplots(figsize=(8,5))
+        fig_s, ax_s = plt.subplots(figsize=FIG_SINGLE)
         idx = i + 6
 
         if i < 3:
@@ -168,7 +172,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     # INPUTS
     # ==========================================================
 
-    fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
+    fig, axs = plt.subplots(2, 3, figsize=FIG_MULTI, sharex=True)
 
     for i, ax in enumerate(axs.flat):
 
@@ -187,7 +191,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
                 format="pdf", bbox_inches="tight")
 
     for i in range(6):
-        fig_s, ax_s = plt.subplots(figsize=(8,5))
+        fig_s, ax_s = plt.subplots(figsize=FIG_SINGLE)
 
         ax_s.axhline(y=params.u_bar, color='g', linestyle='-.')
         ax_s.axhline(y=params.u_bar * uref[i], color='r', linestyle='--')
@@ -211,7 +215,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
     Force = (model.F @ uHistory.T).T
     Torque = (model.M @ uHistory.T).T
 
-    fig, axs = plt.subplots(2, 3, figsize=(24, 10), sharex=True)
+    fig, axs = plt.subplots(2, 3, figsize=FIG_MULTI, sharex=True)
 
     force_labels = [r"$F_x$", r"$F_y$", r"$F_z$"]
     torque_labels = [r"$\tau_x$", r"$\tau_y$", r"$\tau_z$"]
@@ -237,7 +241,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
 
     for i in range(3):
 
-        fig_f, ax_f = plt.subplots(figsize=(8,5))
+        fig_f, ax_f = plt.subplots(figsize=FIG_SINGLE)
         ax_f.step(time, Force[:, i], where="post",
                   color=actualColor, linewidth=actualWidth)
         ax_f.set_ylabel(force_labels[i] + r" [N]")
@@ -248,7 +252,7 @@ def plotter(file_path=None, model=None, params=None, animate=False):
                       format="pdf", bbox_inches="tight")
         plt.close(fig_f)
 
-        fig_t, ax_t = plt.subplots(figsize=(8,5))
+        fig_t, ax_t = plt.subplots(figsize=FIG_SINGLE)
         ax_t.step(time, Torque[:, i], where="post",
                   color=actualColor, linewidth=actualWidth)
         ax_t.set_ylabel(torque_labels[i] + r" [Nm]")
