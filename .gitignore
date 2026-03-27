@@ -9,6 +9,7 @@
 *.pt
 *.so
 *.cpp
+*.mp4
 generated/*
 nn_models/*
 data/*

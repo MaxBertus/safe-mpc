@@ -17,7 +17,6 @@ from acados_template import (
     AcadosSim, AcadosSimSolver,
 )
 
-from safe_mpc import ocp
 from utils.plotter import plotter
 
 
@@ -81,7 +80,8 @@ class Params:
             0.0, 0.0, 0.0,
             0.0, 0.0, 0.0,
         ])
-        self.use_u_ref_hovering = True   # If True, compute hovering input as reference
+        self.use_u_ref_hovering = True   # If True, compute hovering input as 
+                                         # reference
 
         # --- Environment: obstacle list ---
         # Each entry is a dict with keys 'center', 'dimensions' (or 'radius'), and 'type'
@@ -121,6 +121,11 @@ class Params:
         self.plots_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "plots"
         )
+
+        # --- MC data gathering ---
+        self.mc_num = 100   # Number of simulations
+        self.terminal_const = "eq"  # "vboc" / "eq" / "none"
+        self.seed = 42 
 
 
 # =============================================================================
@@ -537,11 +542,25 @@ def define_ocp(
     ocp.constraints.lh = model.h_min
     ocp.constraints.uh = model.h_max
 
-    # Terminal constraint: obstacle + NN safe-set stacked
-    nn_expr = safe_set.nn_func(model.amodel.x, model.amodel.p)
-    ocp.model.con_h_expr_e = vertcat(h_expr, nn_expr)
-    ocp.constraints.lh_e = np.zeros((7, 1))
-    ocp.constraints.uh_e = np.full((7, 1), 1e6)
+    match params.terminal_const:
+        case "vboc":
+            nn_expr = safe_set.nn_func(model.amodel.x, model.amodel.p)
+            ocp.model.con_h_expr_e = vertcat(h_expr, nn_expr)
+            ocp.constraints.lh_e = np.zeros((7, 1))
+            ocp.constraints.uh_e = np.full((7, 1), 1e6)
+        case "eq":
+            ocp.model.con_h_expr_e = h_expr
+            ocp.constraints.lh_e = model.h_min
+            ocp.constraints.uh_e = model.h_max
+            
+            nv = 6
+            ocp.constraints.lbx_e = np.zeros(nv)
+            ocp.constraints.ubx_e = np.zeros(nv)
+            ocp.constraints.idxbx_e = np.arange(nv, nx)
+        case "none":
+            ocp.model.con_h_expr_e = h_expr
+            ocp.constraints.lh_e = model.h_min
+            ocp.constraints.uh_e = model.h_max
 
     # --- Solver options ---
     ocp.solver_options.integrator_type = "ERK"
@@ -624,7 +643,6 @@ def define_ocpSafeAbort(
         u_hover = (
             np.linalg.pinv(model.R(np.zeros(nx)).full() @ model.F)
             @ np.array([0, 0, params.mass * params.g])
-            / params.u_bar
         )
     else:
         u_hover = np.zeros(nu)
@@ -1225,7 +1243,6 @@ def run_mpc(
         u0 = (
             np.linalg.pinv(model.R(x).full() @ model.F)
             @ np.array([0, 0, params.mass * params.g])
-            / params.u_bar
         )
         u_prev = np.full((params.N, model.nu), u0)
 
@@ -1287,7 +1304,6 @@ def run_mpc(
                     u_hover = (
                         np.linalg.pinv(model.R(x_safe_start).full() @ model.F)
                         @ np.array([0, 0, params.mass * params.g])
-                        / params.u_bar
                     )
                     x_guess_abort = np.tile(x_safe_start, (params.Nvboc + 1, 1))
                     u_guess_abort = np.tile(u_hover, (params.Nvboc, 1))
