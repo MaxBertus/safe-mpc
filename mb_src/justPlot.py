@@ -3,7 +3,7 @@ import casadi as ca
 from casadi import MX, vertcat, horzcat, sin, cos, tan, cross
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 from utils.plotter import plotter
-from mpc_vboc_wog import Params, SthModel
+from mb_src.mpc_vboc_mc import Params, SthModel
 import os
 import pickle
 
