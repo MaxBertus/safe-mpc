@@ -3,6 +3,9 @@ import copy
 import ctypes
 import pickle
 import time
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import Optional
 
 import numpy as np
 import torch
@@ -84,10 +87,15 @@ class Params:
                                          # reference
 
         # --- MC data gathering ---
-        self.mc_mode = True  
+        self.mc_mode = True
         self.mc_num = 100   # Number of simulations
         self.terminal_const = "eq"  # "vboc" / "eq" / "none"
-        self.seed = 42 
+        self.seed = 42
+
+
+        # --- Goal-reaching tolerances ---
+        self.goal_pos_tol = 0.2    # Position tolerance [m]
+        self.goal_vel_tol = 0.5    # Velocity tolerance [m/s]
 
         # --- Environment: obstacle list ---
         # Each entry is a dict with keys 'center', 'dimensions' (or 'radius'), and 'type'
@@ -137,7 +145,7 @@ class Params:
 
         # Dimension limits used as fallback when obs_bounds entry is missing a key.
         self.obs_dim_min = np.array([0.3, 0.3, 0.3])   # full dimensions [m]
-        self.obs_dim_max = np.array([1.0, 1.5, 1.5])
+        self.obs_dim_max = np.array([1.5, 1.5, 1.5])
 
         # --- Room extents [m] ---
         self.xlim = [-3.0, 3.0]
@@ -170,8 +178,166 @@ class Params:
             os.path.dirname(os.path.abspath(__file__)), "plots"
         )
 
+
 # =============================================================================
-# SUPPORT FUNCTIONS
+# RUN RESULT  —  outcome data returned by run_mpc
+# =============================================================================
+
+class FailReason(Enum):
+    """Enumeration of possible run failure reasons."""
+    NONE = auto()               # No failure (success)
+    COLLISION = auto()          # Drone collided with an obstacle
+    SOLVER_INFEASIBLE = auto()  # Tracking MPC became infeasible, no safe abort
+    FAILSAFE_TRIGGERED = auto() # Safe abort was triggered but target not reached
+    FAILSAFE_FAILED = auto()    # Safe abort itself produced a collision
+    TIMEOUT = auto()            # Simulation ended without reaching the goal
+
+
+@dataclass
+class RunResult:
+    """Aggregated outcome for a single MPC simulation run.
+
+    Attributes
+    ----------
+    success : bool
+        True if the drone reached the goal without collision.
+    fail_reason : FailReason
+        Enum describing why the run failed (NONE on success).
+    failsafe_triggered : bool
+        True if the safe-abort controller was activated at any point.
+    failsafe_success : bool
+        True if the safe-abort controller completed without collision.
+    collision_detected : bool
+        True if any obstacle collision was detected during the run.
+    collision_time : float or None
+        Simulation time [s] at which the first collision occurred.
+    goal_reached : bool
+        True if the goal tolerance was satisfied at least once.
+    goal_time : float or None
+        Simulation time [s] at which the goal was first reached.
+    n_infeasible_steps : int
+        Total number of MPC steps that returned an infeasible status.
+    total_sim_time : float
+        Wall-clock duration of the entire simulation [s].
+    avg_solve_time_ms : float
+        Mean NLP solve time across all steps [ms].
+    max_solve_time_ms : float
+        Maximum NLP solve time across all steps [ms].
+    min_solve_time_ms : float
+        Minimum NLP solve time across all steps [ms].
+    n_steps : int
+        Total number of control steps executed.
+    run_id : int
+        Index of the MC run (0-based, -1 for single runs).
+    """
+    success: bool = False
+    fail_reason: FailReason = FailReason.NONE
+    failsafe_triggered: bool = False
+    failsafe_success: bool = False
+    collision_detected: bool = False
+    collision_time: Optional[float] = None
+    goal_reached: bool = False
+    goal_time: Optional[float] = None
+    n_infeasible_steps: int = 0
+    total_sim_time: float = 0.0
+    avg_solve_time_ms: float = 0.0
+    max_solve_time_ms: float = 0.0
+    min_solve_time_ms: float = float('inf')
+    n_steps: int = 0
+    run_id: int = -1
+
+# =============================================================================
+# SUPPORT FUNCTIONS  —  goal check and collision check
+# =============================================================================
+
+def check_goal_reached(
+    x: np.ndarray,
+    x_ref: np.ndarray,
+    pos_tol: float = 0.2,
+    vel_tol: float = 0.5,
+) -> bool:
+    """Return True if the drone is within tolerance of the goal state.
+
+    The check is satisfied when both:
+    - The Euclidean position error is below ``pos_tol`` [m].
+    - The Euclidean linear velocity norm is below ``vel_tol`` [m/s].
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Current state vector, shape (nx,).  Assumes layout
+        [px, py, pz, roll, pitch, yaw, vx, vy, vz, wx, wy, wz].
+    x_ref : np.ndarray
+        Reference state vector, same layout as ``x``.
+    pos_tol : float
+        Maximum allowed position error [m].  Default 0.2.
+    vel_tol : float
+        Maximum allowed linear velocity norm [m/s].  Default 0.5.
+
+    Returns
+    -------
+    bool
+        True if both position and velocity tolerances are satisfied.
+    """
+    pos_error = np.linalg.norm(x[:3] - x_ref[:3])
+    vel_norm = np.linalg.norm(x[6:9])
+    return pos_error <= pos_tol and vel_norm <= vel_tol
+
+
+def check_collision(
+    x: np.ndarray,
+    obstacles: list[dict],
+    drone_radius: float,
+) -> bool:
+    """Return True if the drone centre is inside (or touching) any obstacle.
+
+    For **box** obstacles the drone is modelled as a sphere of radius
+    ``drone_radius``; a collision occurs when the Euclidean distance from
+    the drone centre to the closest point on the box surface is strictly
+    less than ``drone_radius``.
+
+    For **sphere** obstacles the collision condition is simply that the
+    distance between centres is less than the sum of the two radii.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Current state vector, shape (nx,).  Position extracted from x[:3].
+    obstacles : list[dict]
+        Each entry must have 'type' and 'center', plus either 'dimensions'
+        (for 'box') or 'radius' (for 'sphere').
+    drone_radius : float
+        Effective radius of the drone sphere used for collision detection [m].
+
+    Returns
+    -------
+    bool
+        True if any obstacle is in collision with the drone.
+    """
+    pos = x[:3]
+
+    for obs in obstacles:
+        if obs['type'] == 'box':
+            half = obs['dimensions'] / 2.0
+            lo = obs['center'] - half
+            hi = obs['center'] + half
+
+            # Closest point on the box to the drone centre
+            closest = np.clip(pos, lo, hi)
+            dist = np.linalg.norm(pos - closest)
+
+            if dist < drone_radius:
+                return True
+
+        elif obs['type'] == 'sphere':
+            dist = np.linalg.norm(pos - obs['center'])
+            if dist < (drone_radius + obs['radius']):
+                return True
+
+    return False
+
+# =============================================================================
+# SUPPORT FUNCTIONS  —  obstacle randomisation
 # =============================================================================
 
 def randomize_obstacles(params: Params, run_id: int) -> list[dict]:
@@ -1279,18 +1445,21 @@ def discretize_box_surface(
 def run_mpc(
     model: SthModel,
     params: Params,
-) -> None:
-    """Run the full MPC simulation loop and save the trajectory to disk.
+    run_id: int = -1,
+) -> RunResult:
+    """Run the full MPC simulation loop and return a structured outcome.
 
-    For each initial state in ``x0_list``:
+    For each initial state, the function:
 
-    1. Discretise obstacles into sphere clouds for the box solver.
-    2. Compile the tracking and safe-abort OCP solvers.
-    3. Step through the simulation horizon, applying the tracking MPC
+    1. Discretises obstacles into sphere clouds for the box solver.
+    2. Compiles the tracking and safe-abort OCP solvers.
+    3. Steps through the simulation horizon, applying the tracking MPC
        control or falling back to stored inputs on infeasibility.
-    4. If consecutive failures exceed the horizon, execute the pre-computed
-       safe-abort trajectory.
-    5. Persist state, input, and box trajectories to ``data/trajectory.pkl``.
+    4. At every step, checks for obstacle collision and goal reaching.
+    5. If consecutive failures exceed the horizon, executes the pre-computed
+       safe-abort trajectory (also monitored for collision).
+    6. Persists state, input, and box trajectories to ``data/trajectory.pkl``.
+    7. Returns a :class:`RunResult` with outcome, fail reason, and timings.
 
     Parameters
     ----------
@@ -1298,7 +1467,18 @@ def run_mpc(
         Robot model providing dynamics and constraint functions.
     params : Params
         Configuration object providing all simulation settings.
+    run_id : int, optional
+        Index of the current MC run; stored in the returned result.
+        Use -1 for single (non-MC) runs.
+
+    Returns
+    -------
+    result : RunResult
+        Structured outcome for this run; see :class:`RunResult` for fields.
     """
+    result = RunResult(run_id=run_id)
+    wall_start = time.perf_counter()
+
     # --- Build neural-network safe set ---
     safe_set = NetSafeSet(model, params)
 
@@ -1329,7 +1509,6 @@ def run_mpc(
     ocp_tracking = define_ocp(model, params, safe_set)
     ocpSafeAbort = define_ocpSafeAbort(model, params)
 
-    # Load l4casadi shared library globally so acados can resolve the model symbol
     ctypes.CDLL(
         os.path.join(params.build_dir, f'lib{params.robot_name}_model.so'),
         mode=ctypes.RTLD_GLOBAL,
@@ -1339,11 +1518,11 @@ def run_mpc(
     solverSafeAbort = AcadosOcpSolver(ocpSafeAbort, json_file="acados_ocp_safe_abort.json")
     sim_solver = create_acados_sim(model, params)
 
-    # Placeholder: list of initial states (extend for multi-IC experiments)
     x0_list = np.zeros((1, model.nx))
 
     xg_all, ug_all, bg_all = [], [], []
 
+    # For a single initial condition the outer loop runs once
     for x0 in x0_list:
         x = x0.copy()
         xg = [x.copy()]
@@ -1357,7 +1536,6 @@ def run_mpc(
         )
         u_prev = np.full((params.N, model.nu), u0)
 
-        # Compute initial free-space box
         if len(obsCenters) > 0:
             discObsPoints = obsCenters - x[:3]
             x_min, x_max, y_min, y_max, z_min, z_max, _, _ = min_cube_select(
@@ -1380,34 +1558,46 @@ def run_mpc(
             u_guess=u_prev, x_guess=x_prev, p_guess=box,
         )
 
-        # --- MPC loop ---
+        # --- Timing accumulators ---
+        solve_times_ms: list[float] = []
         fails = 0
         follow_safe_abort = False
         u_safe_abort = None
-        ttot = 0.0
-        tmax = 0.0
-        tmin = params.dt * 10
 
         for i in tqdm(range(params.time.shape[0]), desc="MPC Simulation Progress"):
+            # ---- Collision check before applying the next input ----
+            if check_collision(x, params.obstacles, params.maxRad):
+                result.collision_detected = True
+                result.collision_time = float(i * params.dt)
+                result.fail_reason = FailReason.COLLISION
+                result.success = False
+                break
+
+            # ---- Goal check ----
+            if not result.goal_reached and check_goal_reached(
+                x, params.x_ref, params.goal_pos_tol, params.goal_vel_tol
+            ):
+                result.goal_reached = True
+                result.goal_time = float(i * params.dt)
+
+            # ---- Solve tracking MPC ----
             t0 = time.perf_counter()
             solver.solve_for_x0(x, False, False)
-            t1 = (time.perf_counter() - t0) * 10
-
-            tmax = max(tmax, t1)
-            tmin = min(tmin, t1)
-            ttot += 1
+            solve_ms = (time.perf_counter() - t0) * 1e3
+            solve_times_ms.append(solve_ms)
 
             x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
             u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
             feas = solver.get_status()
 
             if feas == 0:
-                # Nominal: apply first optimal input and roll back guess
                 fails = 0
                 u_to_apply = u_sol[0]
                 x_prev = x_sol.copy()
                 u_prev = u_sol.copy()
             else:
+                result.n_infeasible_steps += 1
+
                 if fails == 0:
                     # First failure: pre-compute safe-abort trajectory
                     print("Alert: MPC infeasibility detected.")
@@ -1432,18 +1622,17 @@ def run_mpc(
                     ])
 
                 if fails == params.N:
-                    # Too many consecutive failures: switch to safe abort
                     print(f"Switching to safe abort trajectory at t={i * params.dt:.2f}s")
                     follow_safe_abort = True
+                    result.failsafe_triggered = True
                     break
 
-                # Fall back to stored input from the previous feasible solution
                 u_to_apply = u_prev[fails]
                 fails += 1
 
             x_next = dynamicsSim(sim_solver, x, u_to_apply, params.nsub)
 
-            # Update free-space box for the next step
+            # Update free-space box
             if len(obsCenters) > 0:
                 discObsPoints = obsCenters - x_next[:3]
                 x_min, x_max, y_min, y_max, z_min, z_max, boxFeasible, _ = min_cube_select(
@@ -1459,7 +1648,6 @@ def run_mpc(
             if feas == 0:
                 rollback_guess(solver, model, params, x_next, p_current=box)
             else:
-                # Manual shift without reading from the infeasible solver
                 u_shifted = np.vstack([u_prev[1:], u_prev[-1]])
                 x_shifted = np.vstack([x_prev[1:], x_prev[-1]])
                 initialize_guess(
@@ -1468,40 +1656,243 @@ def run_mpc(
                 )
 
             x = x_next.copy()
+            result.n_steps += 1
             ug.append(u_to_apply)
             xg.append(x_next.copy())
             bg.append(box.copy())
 
-        print(
-            f"Average time per iteration: {ttot / i:.2f} ms, "
-            f"max: {tmax:.2f} ms, min: {tmin:.2f} ms"
-        )
-
-        # --- Execute safe-abort trajectory if triggered ---
-        if follow_safe_abort:
+        # ---- Safe-abort phase ----
+        if follow_safe_abort and u_safe_abort is not None:
             print(f"x_safe_start: {x_prev[params.N, :]}")
             print(f"x after {fails} fallback steps: {x}")
-            print(f"Difference: {x - x_prev[params.N, :]}")
-            input("Press Enter to continue...")
 
+            failsafe_collision = False
             for j in range(params.Nvboc):
+                if check_collision(x, params.obstacles, params.maxRad):
+                    result.collision_detected = True
+                    result.collision_time = float(result.n_steps * params.dt)
+                    result.fail_reason = FailReason.FAILSAFE_FAILED
+                    failsafe_collision = True
+                    break
+
                 x_next = dynamicsSim(sim_solver, x, u_safe_abort[j], params.nsub)
                 x = x_next.copy()
+                result.n_steps += 1
                 ug.append(u_safe_abort[j])
                 xg.append(x_next.copy())
                 bg.append(box.copy())
+
+            if not failsafe_collision:
+                result.failsafe_success = True
+                result.fail_reason = FailReason.FAILSAFE_TRIGGERED
 
         xg_all.append(np.asarray(xg))
         ug_all.append(np.asarray(ug))
         bg_all.append(np.asarray(bg))
 
-    # --- Persist trajectory data ---
+    # ---- Final outcome determination ----
+    # Check goal at end of trajectory if not already flagged as a collision
+    if not result.collision_detected:
+        if result.goal_reached:
+            result.success = True
+            result.fail_reason = FailReason.NONE
+        elif result.failsafe_triggered:
+            if result.fail_reason != FailReason.FAILSAFE_FAILED:
+                result.fail_reason = FailReason.FAILSAFE_TRIGGERED
+            result.success = False
+        else:
+            # Loop completed without reaching goal and without infeasibility abort
+            if result.n_infeasible_steps > 0 and not result.failsafe_triggered:
+                result.fail_reason = FailReason.SOLVER_INFEASIBLE
+            else:
+                result.fail_reason = FailReason.TIMEOUT
+            result.success = False
+
+    # ---- Timing summary ----
+    result.total_sim_time = time.perf_counter() - wall_start
+    if solve_times_ms:
+        result.avg_solve_time_ms = float(np.mean(solve_times_ms))
+        result.max_solve_time_ms = float(np.max(solve_times_ms))
+        result.min_solve_time_ms = float(np.min(solve_times_ms))
+
+    # ---- Persist trajectory ----
     traj_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl"
     )
     with open(traj_path, "wb") as f:
         pickle.dump({"xg": xg_all, "ug": ug_all, "bg": bg_all}, f,
                     protocol=pickle.HIGHEST_PROTOCOL)
+
+    return result
+
+
+# =============================================================================
+# MC STATISTICS
+# =============================================================================
+
+def print_mc_statistics(results: list[RunResult], params: Params) -> None:
+    """Print a formatted Monte Carlo statistics report to the terminal.
+
+    Covers:
+    - Overall success / failure counts and rates
+    - Breakdown by failure reason
+    - Failsafe activation and success rates
+    - Collision statistics
+    - Goal-reaching timing (for successful runs)
+    - NLP solve-time statistics (mean, max, min across all runs)
+
+    Parameters
+    ----------
+    results : list[RunResult]
+        List of outcomes, one per MC run.
+    params : Params
+        Configuration object (used to display simulation settings).
+    """
+    n = len(results)
+    if n == 0:
+        print("No results to report.")
+        return
+
+    # ---- Aggregate counters ----
+    n_success = sum(r.success for r in results)
+    n_fail = n - n_success
+
+    fail_counts: dict[FailReason, int] = {}
+    for r in results:
+        if not r.success:
+            fail_counts[r.fail_reason] = fail_counts.get(r.fail_reason, 0) + 1
+
+    n_failsafe = sum(r.failsafe_triggered for r in results)
+    n_failsafe_ok = sum(r.failsafe_success for r in results)
+    n_collision = sum(r.collision_detected for r in results)
+
+    goal_times = [r.goal_time for r in results if r.success and r.goal_time is not None]
+    collision_times = [r.collision_time for r in results if r.collision_detected and r.collision_time is not None]
+
+    avg_solve = [r.avg_solve_time_ms for r in results if r.n_steps > 0]
+    max_solve = [r.max_solve_time_ms for r in results if r.n_steps > 0]
+    min_solve = [r.min_solve_time_ms for r in results if r.n_steps > 0]
+    total_wall = [r.total_sim_time for r in results]
+    infeasible_steps = [r.n_infeasible_steps for r in results]
+
+    W = 68  # total width of the box
+
+    def hline(char: str = "─") -> str:
+        return "┤" + char * (W - 2) + "├" if char != "─" else "─" * W
+
+    def box_top() -> str:
+        return "┌" + "─" * (W - 2) + "┐"
+
+    def box_bot() -> str:
+        return "└" + "─" * (W - 2) + "┘"
+
+    def section(title: str) -> str:
+        pad = W - 4 - len(title)
+        return "│ " + title + " " * pad + " │"
+
+    def row(label: str, value: str) -> str:
+        content = f"  {label:<38} {value:>22}"
+        content = content[:W - 2]
+        return "│" + content + " " * max(0, W - 2 - len(content)) + "│"
+
+    def divider() -> str:
+        return "├" + "─" * (W - 2) + "┤"
+
+    lines: list[str] = []
+    lines.append(box_top())
+    title_str = "MONTE CARLO SIMULATION REPORT"
+    lines.append("│" + title_str.center(W - 2) + "│")
+    lines.append(divider())
+
+    # ---- Configuration ----
+    lines.append(section("CONFIGURATION"))
+    lines.append(row("Runs executed",           f"{n}"))
+    lines.append(row("Horizon N",               f"{params.N}"))
+    lines.append(row("Safe-abort horizon Nvboc", f"{params.Nvboc}"))
+    lines.append(row("Simulation duration [s]", f"{params.SimDuration:.1f}"))
+    lines.append(row("dt [s]",                  f"{params.dt:.3f}"))
+    lines.append(row("Terminal constraint",     params.terminal_const))
+    lines.append(row("Goal pos tolerance [m]",  f"{params.goal_pos_tol:.3f}"))
+    lines.append(row("Goal vel tolerance [m/s]",f"{params.goal_vel_tol:.3f}"))
+    lines.append(divider())
+
+    # ---- Overall outcome ----
+    lines.append(section("OVERALL OUTCOME"))
+    lines.append(row("Successful runs",  f"{n_success:>5} / {n}  ({100*n_success/n:5.1f} %)"))
+    lines.append(row("Failed runs",      f"{n_fail:>5} / {n}  ({100*n_fail/n:5.1f} %)"))
+    lines.append(divider())
+
+    # ---- Failure breakdown ----
+    lines.append(section("FAILURE BREAKDOWN"))
+    reason_labels = {
+        FailReason.COLLISION:          "Collision with obstacle",
+        FailReason.SOLVER_INFEASIBLE:  "Solver infeasible (no failsafe)",
+        FailReason.FAILSAFE_TRIGGERED: "Failsafe triggered (goal not reached)",
+        FailReason.FAILSAFE_FAILED:    "Failsafe triggered + collision",
+        FailReason.TIMEOUT:            "Timeout (goal not reached)",
+    }
+    for reason, label in reason_labels.items():
+        count = fail_counts.get(reason, 0)
+        pct = 100 * count / n
+        lines.append(row(f"  {label}", f"{count:>5}  ({pct:5.1f} %)"))
+    lines.append(divider())
+
+    # ---- Failsafe statistics ----
+    lines.append(section("FAILSAFE CONTROLLER"))
+    lines.append(row("Activations",
+                     f"{n_failsafe:>5} / {n}  ({100*n_failsafe/n:5.1f} %)"))
+    if n_failsafe > 0:
+        lines.append(row("Successful completions",
+                         f"{n_failsafe_ok:>5} / {n_failsafe}  ({100*n_failsafe_ok/n_failsafe:5.1f} %)"))
+    lines.append(divider())
+
+    # ---- Collision statistics ----
+    lines.append(section("COLLISION STATISTICS"))
+    lines.append(row("Runs with collision",
+                     f"{n_collision:>5} / {n}  ({100*n_collision/n:5.1f} %)"))
+    if collision_times:
+        lines.append(row("Avg collision time [s]",   f"{np.mean(collision_times):.3f}"))
+        lines.append(row("Earliest collision [s]",   f"{np.min(collision_times):.3f}"))
+        lines.append(row("Latest collision [s]",     f"{np.max(collision_times):.3f}"))
+    lines.append(divider())
+
+    # ---- Goal-reaching statistics ----
+    lines.append(section("GOAL-REACHING (successful runs)"))
+    if goal_times:
+        lines.append(row("Avg time to goal [s]",  f"{np.mean(goal_times):.3f}"))
+        lines.append(row("Min time to goal [s]",  f"{np.min(goal_times):.3f}"))
+        lines.append(row("Max time to goal [s]",  f"{np.max(goal_times):.3f}"))
+        lines.append(row("Std time to goal [s]",  f"{np.std(goal_times):.3f}"))
+    else:
+        lines.append(row("No successful run reached the goal", "—"))
+    lines.append(divider())
+
+    # ---- NLP solve-time statistics ----
+    lines.append(section("NLP SOLVE TIMES (per step)"))
+    if avg_solve:
+        lines.append(row("Mean of per-run averages [ms]", f"{np.mean(avg_solve):.3f}"))
+        lines.append(row("Global maximum [ms]",           f"{np.max(max_solve):.3f}"))
+        lines.append(row("Global minimum [ms]",           f"{np.min(min_solve):.3f}"))
+    lines.append(divider())
+
+    # ---- Infeasibility statistics ----
+    lines.append(section("SOLVER INFEASIBILITY"))
+    lines.append(row("Avg infeasible steps per run",  f"{np.mean(infeasible_steps):.2f}"))
+    lines.append(row("Max infeasible steps in a run", f"{int(np.max(infeasible_steps))}"))
+    lines.append(row("Runs with ≥1 infeasible step",
+                     f"{sum(s > 0 for s in infeasible_steps):>5} / {n}"))
+    lines.append(divider())
+
+    # ---- Wall-clock timing ----
+    lines.append(section("WALL-CLOCK TIMING"))
+    lines.append(row("Total wall time [s]",        f"{sum(total_wall):.2f}"))
+    lines.append(row("Avg wall time per run [s]",  f"{np.mean(total_wall):.2f}"))
+    lines.append(row("Max wall time per run [s]",  f"{np.max(total_wall):.2f}"))
+    lines.append(row("Min wall time per run [s]",  f"{np.min(total_wall):.2f}"))
+
+    lines.append(box_bot())
+
+    print("\n".join(lines))
 
 
 # =============================================================================
@@ -1519,11 +1910,14 @@ if __name__ == "__main__":
         data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
         os.makedirs(data_dir, exist_ok=True)
 
+        mc_results: list[RunResult] = []
+
         for run_id in tqdm(range(params.mc_num), desc="Monte Carlo runs"):
-            # Randomize obstacles for this run (deterministic per seed+run_id)
+            # Randomize obstacles for this run (deterministic per seed + run_id)
             params.obstacles = randomize_obstacles(params, run_id)
 
-            run_mpc(model, params)
+            result = run_mpc(model, params, run_id=run_id)
+            mc_results.append(result)
 
             # Rename the saved trajectory to avoid overwriting
             src = os.path.join(data_dir, "trajectory.pkl")
@@ -1531,14 +1925,43 @@ if __name__ == "__main__":
             if os.path.exists(src):
                 os.replace(src, dst)
 
-        print(f"MC simulation completed: {params.mc_num} runs saved in '{data_dir}'.")
+        # ---- Save MC statistics ----
+        stats_path = os.path.join(data_dir, "mc_statistics.pkl")
+        with open(stats_path, "wb") as f:
+            pickle.dump(mc_results, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        print_mc_statistics(mc_results, params)
+        print(f"\nMC results saved to '{stats_path}'.")
 
     else:
         # ----------------------------------------------------------------
         # Single run: use the fixed obstacles defined in Params
         # ----------------------------------------------------------------
-        run_mpc(model, params)
-        print("Single simulation completed. Trajectory saved to 'trajectory.pkl'.")
+        result = run_mpc(model, params, run_id=-1)
+
+        # Pretty-print single-run outcome
+        W = 50
+        print("\n" + "┌" + "─" * (W - 2) + "┐")
+        print("│" + "SINGLE RUN RESULT".center(W - 2) + "│")
+        print("├" + "─" * (W - 2) + "┤")
+        status = "✓  SUCCESS" if result.success else "✗  FAILED"
+        print("│" + f"  Status : {status}".ljust(W - 2) + "│")
+        print("│" + f"  Reason : {result.fail_reason.name}".ljust(W - 2) + "│")
+        print("│" + f"  Goal reached          : {result.goal_reached}".ljust(W - 2) + "│")
+        if result.goal_time is not None:
+            print("│" + f"  Goal time [s]         : {result.goal_time:.3f}".ljust(W - 2) + "│")
+        print("│" + f"  Collision             : {result.collision_detected}".ljust(W - 2) + "│")
+        if result.collision_time is not None:
+            print("│" + f"  Collision time [s]    : {result.collision_time:.3f}".ljust(W - 2) + "│")
+        print("│" + f"  Failsafe triggered    : {result.failsafe_triggered}".ljust(W - 2) + "│")
+        print("│" + f"  Failsafe success      : {result.failsafe_success}".ljust(W - 2) + "│")
+        print("│" + f"  Infeasible steps      : {result.n_infeasible_steps}".ljust(W - 2) + "│")
+        print("│" + f"  Avg solve time [ms]   : {result.avg_solve_time_ms:.3f}".ljust(W - 2) + "│")
+        print("│" + f"  Max solve time [ms]   : {result.max_solve_time_ms:.3f}".ljust(W - 2) + "│")
+        print("│" + f"  Total wall time [s]   : {result.total_sim_time:.2f}".ljust(W - 2) + "│")
+        print("└" + "─" * (W - 2) + "┘")
+
+        print("\nSimulation completed. Trajectory saved to 'data/trajectory.pkl'.")
 
         traj_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl"
