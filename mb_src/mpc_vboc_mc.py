@@ -88,8 +88,8 @@ class Params:
 
         # --- MC data gathering ---
         self.mc_mode = True
-        self.mc_num = 100   # Number of simulations
-        self.terminal_const = "eq"  # "vboc" / "eq" / "none"
+        self.mc_num = 10   # Number of simulations
+        self.terminal_const = "vboc"  # "vboc" / "eq" / "none"
         self.seed = 42
 
 
@@ -115,19 +115,19 @@ class Params:
         self.obs_bounds = [
             {
                 "cx": (1.5,  2.5),
-                "cy": (-0.5, 0.5),
-                "cz": (0.0,  1.5),
+                "cy": (0.4, 0.6),
+                "cz": (-0.5,  0.5),
                 "dx": (0.3,  0.8),
-                "dy": (1.0,  2.5),
+                "dy": (1.0,  3.0),
                 "dz": (1.0,  2.5),
             },
             {
-                "cx": (-2.0, -1.0),
-                "cy": (-0.5, 0.5),
-                "cz": (0.0,  2.0),
+                "cx": (-2.5,  -1.5),
+                "cy": (0.4, 0.6),
+                "cz": (-0.5,  0.5),
                 "dx": (0.3,  0.8),
-                "dy": (2.0,  3.5),
-                "dz": (2.0,  3.5),
+                "dy": (1.0,  3.5),
+                "dz": (1.0,  2.5),
             },
             {
                 "cx": (-0.5, 0.5),
@@ -1072,7 +1072,11 @@ class NetSafeSet:
         nori = 3
 
         # --- Load network weights ---
-        nn_data = torch.load(params.net_path, weights_only=False)
+        nn_data = torch.load(
+            params.net_path, 
+            weights_only=False,
+            map_location=params.device
+        )
         model_net = NeuralNetwork(
             params.input_size, params.hidden_size, params.output_size,
             params.number_hidden, params.act_fun, ub=1,
