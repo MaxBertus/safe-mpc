@@ -83,6 +83,12 @@ class Params:
         self.use_u_ref_hovering = True   # If True, compute hovering input as 
                                          # reference
 
+        # --- MC data gathering ---
+        self.mc_mode = True  
+        self.mc_num = 100   # Number of simulations
+        self.terminal_const = "eq"  # "vboc" / "eq" / "none"
+        self.seed = 42 
+
         # --- Environment: obstacle list ---
         # Each entry is a dict with keys 'center', 'dimensions' (or 'radius'), and 'type'
         self.obstacles = [
@@ -90,6 +96,48 @@ class Params:
             {"center": np.array([-1.5, 0.0, 1.0]), "dimensions": np.array([0.5, 3.0, 3.0]), "type": "box"},
             {"center": np.array([0.0,  0.0, 3.0]), "dimensions": np.array([2.0, 2.0, 0.5]), "type": "box"},
         ]
+
+        # --- Obstacle randomization bounds ---
+        # Each entry is a dict with per-axis centre and dimension limits.
+        # If None, falls back to room extents with a safety margin.
+        # Structure: list of dicts, one per obstacle, with optional keys:
+        #   'cx', 'cy', 'cz'   -> (min, max) for the box centre along each axis [m]
+        #   'dx', 'dy', 'dz'   -> (min, max) for the full box dimension along each axis [m]
+        # Any missing key uses the room-wide default.
+        self.obs_bounds = [
+            {
+                "cx": (1.5,  2.5),
+                "cy": (-0.5, 0.5),
+                "cz": (0.0,  1.5),
+                "dx": (0.3,  0.8),
+                "dy": (1.0,  2.5),
+                "dz": (1.0,  2.5),
+            },
+            {
+                "cx": (-2.0, -1.0),
+                "cy": (-0.5, 0.5),
+                "cz": (0.0,  2.0),
+                "dx": (0.3,  0.8),
+                "dy": (2.0,  3.5),
+                "dz": (2.0,  3.5),
+            },
+            {
+                "cx": (-0.5, 0.5),
+                "cy": (-0.5, 0.5),
+                "cz": (2.5,  3.5),
+                "dx": (1.5,  2.5),
+                "dy": (1.5,  2.5),
+                "dz": (0.3,  0.8),
+            },
+        ]
+
+        # Hard safety margins applied on top of obs_bounds when no per-obstacle
+        # bound is specified: centre kept at least this far from room walls [m].
+        self.obs_margin = 0.5
+
+        # Dimension limits used as fallback when obs_bounds entry is missing a key.
+        self.obs_dim_min = np.array([0.3, 0.3, 0.3])   # full dimensions [m]
+        self.obs_dim_max = np.array([1.0, 1.5, 1.5])
 
         # --- Room extents [m] ---
         self.xlim = [-3.0, 3.0]
@@ -122,11 +170,74 @@ class Params:
             os.path.dirname(os.path.abspath(__file__)), "plots"
         )
 
-        # --- MC data gathering ---
-        self.mc_num = 100   # Number of simulations
-        self.terminal_const = "eq"  # "vboc" / "eq" / "none"
-        self.seed = 42 
+# =============================================================================
+# SUPPORT FUNCTIONS
+# =============================================================================
 
+def randomize_obstacles(params: Params, run_id: int) -> list[dict]:
+    """Generate randomized box obstacles for a single MC run.
+
+    Centre and dimension of each obstacle are drawn uniformly within the
+    per-obstacle bounds defined in ``params.obs_bounds``.  For any axis
+    whose bound is not explicitly provided, a room-wide default with a
+    safety margin of ``params.obs_margin`` is used.
+
+    The RNG is seeded with ``params.seed + run_id`` so every run is
+    independently reproducible.
+
+    Parameters
+    ----------
+    params : Params
+        Configuration object providing room extents, obstacle bounds,
+        fallback dimension limits, and the base seed.
+    run_id : int
+        Index of the current MC run (0-based).
+
+    Returns
+    -------
+    obstacles : list[dict]
+        List of obstacle dicts with keys 'center', 'dimensions', 'type'.
+    """
+    rng = np.random.default_rng(params.seed + run_id)
+
+    # Room-wide centre fallback (with safety margin from walls)
+    m = params.obs_margin
+    cx_default = (params.xlim[0] + m, params.xlim[1] - m)
+    cy_default = (params.ylim[0] + m, params.ylim[1] - m)
+    cz_default = (params.zlim[0] + m, params.zlim[1] - m)
+
+    n_obs = len(params.obs_bounds)
+    obstacles = []
+
+    for i in range(n_obs):
+        b = params.obs_bounds[i] if i < len(params.obs_bounds) else {}
+
+        # --- Centre sampling ---
+        cx = rng.uniform(*b.get("cx", cx_default))
+        cy = rng.uniform(*b.get("cy", cy_default))
+        cz = rng.uniform(*b.get("cz", cz_default))
+
+        # --- Dimension sampling ---
+        dx = rng.uniform(
+            b.get("dx", (params.obs_dim_min[0], params.obs_dim_max[0]))[0],
+            b.get("dx", (params.obs_dim_min[0], params.obs_dim_max[0]))[1],
+        )
+        dy = rng.uniform(
+            b.get("dy", (params.obs_dim_min[1], params.obs_dim_max[1]))[0],
+            b.get("dy", (params.obs_dim_min[1], params.obs_dim_max[1]))[1],
+        )
+        dz = rng.uniform(
+            b.get("dz", (params.obs_dim_min[2], params.obs_dim_max[2]))[0],
+            b.get("dz", (params.obs_dim_min[2], params.obs_dim_max[2]))[1],
+        )
+
+        obstacles.append({
+            "center":     np.array([cx, cy, cz]),
+            "dimensions": np.array([dx, dy, dz]),
+            "type":       "box",
+        })
+
+    return obstacles
 
 # =============================================================================
 # MODEL
@@ -1401,10 +1512,35 @@ if __name__ == "__main__":
     params = Params()
     model = SthModel(params)
 
-    run_mpc(model, params)
-    print("MPC simulation completed. Trajectory saved to 'trajectory.pkl'.")
+    if params.mc_mode:
+        # ----------------------------------------------------------------
+        # Monte Carlo mode: run mc_num simulations with random obstacles
+        # ----------------------------------------------------------------
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        os.makedirs(data_dir, exist_ok=True)
 
-    traj_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl"
-    )
-    plotter(traj_path, model, params, animate=True)
+        for run_id in tqdm(range(params.mc_num), desc="Monte Carlo runs"):
+            # Randomize obstacles for this run (deterministic per seed+run_id)
+            params.obstacles = randomize_obstacles(params, run_id)
+
+            run_mpc(model, params)
+
+            # Rename the saved trajectory to avoid overwriting
+            src = os.path.join(data_dir, "trajectory.pkl")
+            dst = os.path.join(data_dir, f"trajectory_run_{run_id:03d}.pkl")
+            if os.path.exists(src):
+                os.replace(src, dst)
+
+        print(f"MC simulation completed: {params.mc_num} runs saved in '{data_dir}'.")
+
+    else:
+        # ----------------------------------------------------------------
+        # Single run: use the fixed obstacles defined in Params
+        # ----------------------------------------------------------------
+        run_mpc(model, params)
+        print("Single simulation completed. Trajectory saved to 'trajectory.pkl'.")
+
+        traj_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data/trajectory.pkl"
+        )
+        plotter(traj_path, model, params, animate=True)
