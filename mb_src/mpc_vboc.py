@@ -1263,7 +1263,7 @@ def run_mpc(
 
             tmax = max(tmax, t1)
             tmin = min(tmin, t1)
-            ttot += 1
+            ttot += t1
 
             x_sol = np.array([solver.get(k, "x") for k in range(params.N + 1)])
             u_sol = np.array([solver.get(k, "u") for k in range(params.N)])
