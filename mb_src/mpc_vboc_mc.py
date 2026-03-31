@@ -63,7 +63,7 @@ class Params:
             1e2, 1e2, 1e2,   # Linear velocity weights
             1e2, 1e2, 1e2,   # Angular velocity weights
         ])
-        self.R = 1e0 * np.eye(self.nu)   # Input weight matrix
+        self.R = 1e0 * np.eye(self.nu)    # Input weight matrix
         self.N = 60                       # Tracking MPC horizon
         self.Nvboc = 20                   # Safe-abort MPC horizon
         self.nlp_solver_max_iter = 100    # Max NLP iterations
@@ -88,8 +88,8 @@ class Params:
 
         # --- MC data gathering ---
         self.mc_mode = True
-        self.mc_num = 10   # Number of simulations
-        self.terminal_const = "vboc"  # "vboc" / "eq" / "none"
+        self.mc_num = 100   # Number of simulations
+        self.terminal_const = "eq"  # "vboc" / "eq" / "none"
         self.seed = 42
 
 
@@ -188,7 +188,8 @@ class FailReason(Enum):
     NONE = auto()               # No failure (success)
     COLLISION = auto()          # Drone collided with an obstacle
     SOLVER_INFEASIBLE = auto()  # Tracking MPC became infeasible, no safe abort
-    FAILSAFE_TRIGGERED = auto() # Safe abort was triggered but target not reached
+    FAILSAFE_TRIGGERED = auto() # Safe abort was triggered but target not 
+                                # reached
     FAILSAFE_FAILED = auto()    # Safe abort itself produced a collision
     TIMEOUT = auto()            # Simulation ended without reaching the goal
 
@@ -1602,37 +1603,45 @@ def run_mpc(
             else:
                 result.n_infeasible_steps += 1
 
-                if fails == 0:
-                    # First failure: pre-compute safe-abort trajectory
-                    print("Alert: MPC infeasibility detected.")
-                    x_safe_start = x_prev[params.N, :]
-                    u_hover = (
-                        np.linalg.pinv(model.R(x_safe_start).full() @ model.F)
-                        @ np.array([0, 0, params.mass * params.g])
-                    )
-                    x_guess_abort = np.tile(x_safe_start, (params.Nvboc + 1, 1))
-                    u_guess_abort = np.tile(u_hover, (params.Nvboc, 1))
+                if params.terminal_const == "vboc":
+                    if fails == 0:
+                        # First failure: pre-compute safe-abort trajectory
+                        print("Alert: MPC infeasibility detected.")
+                        x_safe_start = x_prev[params.N, :]
+                        u_hover = (
+                            np.linalg.pinv(model.R(x_safe_start).full() @ model.F)
+                            @ np.array([0, 0, params.mass * params.g])
+                        )
+                        x_guess_abort = np.tile(x_safe_start, (params.Nvboc + 1, 1))
+                        u_guess_abort = np.tile(u_hover, (params.Nvboc, 1))
 
-                    initialize_guess(
-                        solverSafeAbort, params.Nvboc, model, params,
-                        x_safe_start,
-                        u_guess=u_guess_abort,
-                        x_guess=x_guess_abort,
-                        p_guess=box,
-                    )
-                    solverSafeAbort.solve_for_x0(x_safe_start, False, False)
-                    u_safe_abort = np.array([
-                        solverSafeAbort.get(k, "u") for k in range(params.Nvboc)
-                    ])
+                        initialize_guess(
+                            solverSafeAbort, params.Nvboc, model, params,
+                            x_safe_start,
+                            u_guess=u_guess_abort,
+                            x_guess=x_guess_abort,
+                            p_guess=box,
+                        )
+                        solverSafeAbort.solve_for_x0(x_safe_start, False, False)
+                        u_safe_abort = np.array([
+                            solverSafeAbort.get(k, "u") for k in range(params.Nvboc)
+                        ])
 
-                if fails == params.N:
-                    print(f"Switching to safe abort trajectory at t={i * params.dt:.2f}s")
-                    follow_safe_abort = True
-                    result.failsafe_triggered = True
+                    if fails == params.N:
+                        print(f"Switching to safe abort trajectory at t={i * params.dt:.2f}s")
+                        follow_safe_abort = True
+                        result.failsafe_triggered = True
+                        break
+
+                    u_to_apply = u_prev[fails]
+                    fails += 1
+
+                else:
+                    # No failsafe mechanism: exit immediately on first infeasibility
+                    print(f"Solver infeasible at t={i * params.dt:.2f}s, aborting.")
+                    result.fail_reason = FailReason.SOLVER_INFEASIBLE
+                    result.success = False
                     break
-
-                u_to_apply = u_prev[fails]
-                fails += 1
 
             x_next = dynamicsSim(sim_solver, x, u_to_apply, params.nsub)
 
